@@ -20,11 +20,12 @@
    Wildcard Pattern Matching
 */
 
+// KT: removed "/*register*/"
 
 #include "match.h"
 
-int matche_after_star (register char *pattern, register char *text);
-int fast_match_after_star (register char *pattern, register char *text);
+int matche_after_star (/*register*/ char *pattern, /*register*/ char *text);
+int fast_match_after_star (/*register*/ char *pattern, /*register*/ char *text);
 
 /*----------------------------------------------------------------------------
 *
@@ -86,7 +87,7 @@ BOOLEAN is_valid_pattern (char *p, int *error_type)
                   }
                   p++;
                   break;
-
+                  
                   /* the [..] construct must be well formed */
             case '[':
                   p++;
@@ -97,7 +98,7 @@ BOOLEAN is_valid_pattern (char *p, int *error_type)
                         *error_type = PATTERN_EMPTY;
                         return FALSE;
                   }
-
+                
                   /* if end of pattern here then bad pattern */
                   if (!*p)
                   {
@@ -203,9 +204,9 @@ BOOLEAN is_valid_pattern (char *p, int *error_type)
 *
 ----------------------------------------------------------------------------*/
 
-int matche (register char *p, register char *t)
+int matche (/*register*/ char *p, /*register*/ char *t)
 {
-      register char range_start, range_end;  /* start and end in range */
+      /*register*/ char range_start, range_end;  /* start and end in range */
 
       BOOLEAN invert;             /* is this [..] or [!..] */
       BOOLEAN member_match;       /* have I matched the [..] construct? */
@@ -288,7 +289,7 @@ int matche (register char *p, register char *t)
                               /* get the range end */
 
                               range_end = *++p;
-
+                              
                               /* if end of pattern or construct
                                  then bad pattern */
 
@@ -400,10 +401,10 @@ int matche (register char *p, register char *t)
 *
 ----------------------------------------------------------------------------*/
 
-int matche_after_star (register char *p, register char *t)
+int matche_after_star (/*register*/ char *p, /*register*/ char *t)
 {
-      register int match = 0;
-      register nextp;
+      /*register*/ int match = 0;
+      /*register*/ int nextp; // KT added int
 
       /* pass over existing ? and * in pattern */
 
@@ -458,7 +459,7 @@ int matche_after_star (register char *p, register char *t)
             if (!*t++)
                   match = MATCH_ABORT;
 
-      } while ( match != MATCH_VALID &&
+      } while ( match != MATCH_VALID && 
                 match != MATCH_ABORT &&
                 match != MATCH_PATTERN);
 

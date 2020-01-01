@@ -1,12 +1,12 @@
 
-/*
+/*				<<<<Last Modified: Thu Feb 08 15:07:30 1996>>>>
 ------------------------------------------------------------------------------
 
-    =====
-    CPCFS  --  c p c f s . h	Variable, Structures, Prototypes
-    =====
+        =====
+        CPCfs  --  c p c f s . h	Variable, Structures, Prototypes
+        =====
 
-	Version 0.85                    (c) Derik van Zuetphen
+	Version 0.85                    (c) February '96 by Derik van Zuetphen
 ------------------------------------------------------------------------------
 */
 
@@ -23,35 +23,52 @@
 #include "match.h"
 
 
+
 /****** Configure here! (or in Makefile) ******/
 
-/* One out of the constants LINUX or DOS must be set to 1.
+/* One out of the constants LINUX, HPUX or DOS must be set to 1.
 This is normally done in the Makefile, in the project file, or with the
 Options menu. */
 
+
+/* for Win32 we want dos code */
+#if defined(WIN32) || defined(WIN64)
+#define DOS		1
+#endif
+
+/*
 #ifndef DOS
-#define DOS		0
+#define DOS		1
 #endif
 #ifndef LINUX
 #define LINUX		0
 #endif
-
-
-#ifndef USE_READLINE
-#define USE_READLINE	0	/* either GNU "readline" or ACTlib17 "inputs" */
+*/
+#ifndef HPUX
+#define HPUX		0
 #endif
+#ifndef SUNOS
+#define SUNOS		0
+#endif
+
+
+//#ifndef USE_READLINE
+//#define USE_READLINE	1	/* either GNU "readline" or ACTlib17 "inputs" */
+//#endif
 
 /****** End of configuration ******/
 
 #define MAJORVERSION	0
 #define MINORVERSION	85
-#define PATCHLEVEL	4
+#define PATCHLEVEL	0
+extern char stamp[];
+extern char copyright[];
 
 
 /****** Operating System ******/
 
-#define SYSV	LINUX
-/*#define BSD	FREEBSD*/
+#define SYSV	LINUX | HPUX
+#define BSD	SUNOS
 #define UNIX	SYSV | BSD
 #if UNIX
 #include "unix.h"
@@ -60,17 +77,23 @@ Options menu. */
 #endif
 
 
-
+#include <string.h>
 
 typedef unsigned char	uchar;
+typedef unsigned short	ushort;
 /* <ushort> defined in types.h, must be in INTEL byte-order! (low, high) */
-#if DOS
+#if defined(DOS)
 typedef unsigned short ushort;
 #endif
 
 typedef char bool;
+#ifndef TRUE
 #define TRUE	1
+#endif
+#ifndef FALSE
 #define FALSE	0
+#endif
+
 
 
 /***********
@@ -78,38 +101,40 @@ typedef char bool;
  ***********/
 
 /****** CPC Filesystem ******/
+/* size of block index in bytes - as stored in directory */
 extern int	BLKNR_SIZE;
+/* number of block index's that will fit into a directory entry */
 extern int	BLKNR;
 
+/* KT - removed */
+#if 0
 typedef enum {	SYSTEMFORMAT=0x41,
 		DATAFORMAT=0xC1,
 		IBMFORMAT=0x01,
 		VORTEXFORMAT=0x80	/* A flag, the sector offset is 01 too*/
 } Format_ID;
-
-
-/* FORMATDIFF Must be less than all differences between Format_IDs. This
-constant is used to detect the type of interleaved formats. */
-
-#define FORMATDIFF 0x20
-
+#endif
 
 #define RECORDSIZE	128	/* 1/8 kByte, constant for CP/M */
 #define EXTENTSIZE	16384	/* 16 kByte, constant for CP/M */
 #define CPM_EOF		26	/* Ctrl-Z */
 
-#ifndef PATH_MAX
-#define PATH_MAX 	256	/* for getwd() */
-#endif
-
 extern	unsigned char filler;	/* copied from track header */
 
-extern	char	full_imagename[PATH_MAX];	/* full pathname, ... */
-extern	char	*imagename;			/* ... only name portion, and ... */
-extern	int	imagefile;			/* ... handle of imagefile */
+/* KT - added this #def so we can check where full_imagename is used */
+#if defined(WIN32) || defined(WIN64)
+#define FULL_IMAGENAME_LENGTH _MAX_PATH
+#else
+#define FULL_IMAGENAME_LENGTH	65
+#endif
+
+extern	char	full_imagename[FULL_IMAGENAME_LENGTH];	/* full pathname, ... */
+extern	char	*imagename;		/* ... only name portion, and ... */
+extern	int	imagefile;		/* ... handle of imagefile */
 
 extern	int	cur_user;
-extern	int	cur_format;
+/* KT - removed */
+/*extern	int	cur_format; */
 
 extern	uchar	*track;		/* 0x100 header + track data */
 
@@ -127,11 +152,7 @@ extern	float	percentage;	/* of allocated blocks */
 /****** User Interface *****/
 #define	CONFIGNAME	"cpcfs.cfg"
 #define HELPFILE	"cpcfs.hlp"
-#if UNIX
-#define INPUTLEN	4096
-#else
 #define INPUTLEN	256
-#endif
 extern	int	nbof_args;
 extern	char	*arg[INPUTLEN];
 extern	char	prompt[INPUTLEN];
@@ -151,7 +172,7 @@ extern int	Verb;
 
 /****** Utility Macros ******/
 /* Answer a plural suffix, if nr is not 1 */
-#define plural(nr)	((nr)==1?"":"s")
+#define plural(nr)	((nr)==1?"":"s")	
 #define plural_y(nr)	((nr)==1?"y":"ies")
 #define atoxi(CP)	(int)strtol((CP),NULL,0)
 			/* same as atoi, but recognizes 0x and 0 prefixes */
@@ -273,18 +294,27 @@ typedef struct {
 extern DirEntry *directory;
 
 
+typedef enum
+{
+	ORDER_SIDES,
+	ORDER_CYLINDERS,
+	ORDER_EAGLE
+} BLOCK_ORDER;
 
 /****** Disk Parameter Block ******/
 
 typedef struct {
 /* extended DPB info, needed for format, in DPB_store */
-	uchar  ID;  /* Identifier */
-	ushort SEC1;/* 1. SECtor number (0, >1, >41h, >C1h) */
+	/* KT - removed */
+	/*uchar  ID;*/  /* Identifier */
+
+	ushort SEC_side1[32];
+	ushort SEC_side2[32];
 	ushort SECS;/* number of sectors per track (8, >9) */
 	ushort TRKS;/* number of tracks per side (>40, 80) */
-	ushort HDS; /* number of heads per disk (>1, 2) */
+	ushort HDS; /* number of heads per disk (>1, 2) */	
 	ushort BPS; /* Bytes Per Sector (128, 256, >512, 1024) */
-
+	
 /* original Disk Parameter Block (> marks CPC defaults) */
 	ushort SPT; /* records Per Track (18, 20, 30, 32, 34, >36, 40) */
 	uchar  BSH; /* Block SHift ...      2^BSH = BLM+1 = Rec/Block */
@@ -301,9 +331,42 @@ typedef struct {
 	ushort BLS; /* BLock Size in bytes (>1024, 2048)*/
 	bool   SYS; /* CP/M present in system tracks */
 	ushort DBL; /* Directory BLocks = CKS/8 */
+
+	BLOCK_ORDER	order;
+	uchar	side0_hd;	/* if accessing side 0, use this head value */
+	uchar	side1_hd;	/* if accessing side 1, use this head value */
+
+	/* sector id skew */
+	int		skew;
+
+	int		num_extents; 	/* calculated from EXM*/
+
+	unsigned char *label_data;	/* NULL = no label file, !=NULL = label file */
+	unsigned long label_data_length;
+
 } DPB_type;
 
+/* KT - added link list of DPB's */
+typedef struct DPB_list_entry
+{
+	/* ident */
+	char	*ident;
+	/* format description */
+	char	*description;
+	/* dpb for this format */
+	DPB_type dpb;
+	/* pointer to next entry in list */
+	struct DPB_list_entry *next;
+} DPB_list_entry;
 
+typedef struct DPB_list
+{
+	/* pointer to first entry in list */
+	DPB_list_entry *first;
+} DPB_list;
+
+/* KT - removed */
+#if 0
 /* DPB templates for SYSTEM, DATA, IBM, VORTEX, and user defined */
 extern const int DPB_store_size;
 typedef enum {	SYSTEM_DPB=0,
@@ -313,15 +376,23 @@ typedef enum {	SYSTEM_DPB=0,
 		USER_DPB=4
 } DPB_Index_Type;
 extern DPB_type DPB_store[];
+#endif
 
 extern DPB_type *dpb;	/* pointer to current DPB */
 
+/* KT - added */
+/* current dpb list entry */
+extern DPB_list_entry *dpb_list_entry;
+/* first dpb list entry in list */
+extern DPB_list dpb_list;
 
+DPB_list_entry *get_dpb_entry_from_format_name(const char *);
 
 /*******
   Tools
  *******/
 
+void	initialise(void);
 void putcharm(int,char);
 void printm(int,char*,...);
 char *lower(char*);
@@ -334,14 +405,14 @@ void do_break();
 void newpage(char* keys);
 char nextline();
 char *repstr(char c,int times);
-char *show_format (uchar sec_offset);
+const char *show_format (struct DPB_list_entry *);
 char *show_mode (int m);
 void reparse (int argnb);
 void expand_percent(char *from, char *to, int max);
 void echom (int v, char *p);
 bool confirmed() ;
 bool tag_ok ();
-void alloc_block(int blk,int file);
+void alloc_block(int blk);
 void free_block(int blk);
 bool is_free_block(int blk);
 void calc_allocation ();
@@ -358,6 +429,7 @@ void build_cpm_name_32(char *buf, int user, char *root, char *ext);
 void str2mem(char *mem, char *str, int spc);
 char *show_hex(int nr, uchar *buf, int size);
 void *Malloc(int bytes);
+void LoadLabelFile(char *LabelFilename, unsigned char **ppData, unsigned long *ppLength);
 
 
 /********
@@ -374,7 +446,7 @@ bool next_sector(int*,int*,int*);
 
 void get_directory();
 void put_directory();
-void update_directory();
+void update_directory(int set_dirty);
 
 extern int glob_env;
 int glob_cpm_next();
@@ -385,11 +457,15 @@ int glob_cpm_file(char *pat);
  *******/
 
 void close_image();
-int  open_image(char *name);
-int  format(char* name,DPB_type *dpb);
-int  sysgen(char* name);
+int  open_image(char *name,int);
+/* KT - modified */
+int format(char* name, DPB_list_entry *entry, int extended);
+/* int  format(char* name,DPB_type *dpb); */
+/* KT - removed */
+/* int  sysgen(char* name);*/
 int  comment_image(const char *text);
-
+int	write_label(DPB_type *dpb,char *label_data, unsigned long label_data_length);
+	
 /********
   Blocks
  ********/
@@ -404,6 +480,8 @@ int  get_free_block();
 long delete (bool silent, char *pattern) ;
 int  parse_attr(char *str, int *mask, bool *set);
 int  change_attrib(char* pattern, int set, int reset);
+long	nuke(bool silent, char *pattern) ;
+void	clean(void);
 
 /**********
   Transfer
@@ -435,6 +513,11 @@ int  execute_file (char *name);
 int  execute_cmd (char *cmd);
 /*int  execute_one_cmd (char *cmd);*/
 
+#if defined(WIN32) || defined(WIN64)
+#define vert	'|'
+#define hori	'-'
+#define cross	'+'
+#else
 #if DOS
 #define vert	0xB3
 #define hori	0xC4
@@ -444,6 +527,6 @@ int  execute_cmd (char *cmd);
 #define hori	'-'
 #define cross	'+'
 #endif
-
+#endif
 
 #endif

@@ -1,40 +1,137 @@
 
-/*
+/*				<<<<Last Modified: Thu Feb 08 15:07:42 1996>>>>
 ------------------------------------------------------------------------------
 
-    =====
-    CPCFS  --  d o s . c   ---   Borland C specific routines
-    =====
+	=====
+	CPCfs  --  d o s . c   ---   Borland C specific routines
+	=====
 
-    Version 0.85                    (c) Derik van Zuetphen
+	Version 0.85                    (c) February '96 by Derik van Zuetphen
 ------------------------------------------------------------------------------
+
+KT - WIN32 version uses DOS code, but with some changes to compile
+with MSDev 
+
 */
 
+#if defined(WIN32) || defined(WIN64)
+#include <stdio.h>
+#include <io.h>
+#include <direct.h>
+#include <conio.h>
+#endif
 
 #include <stdlib.h>
 #include <string.h>
+#if !defined(WIN32) && !defined(WIN64)
 #include <dir.h>
+#endif
 #include <dos.h>	/* the one in includedir of course */
 
 #include "cpcfs.h"
 
+#if defined(WIN32) || defined(WIN64)
+#define MAXPATH		_MAX_PATH
+#define MAXDRIVE	_MAX_DRIVE
+#define MAXDIR		_MAX_DIR
+#define MAXFILE		_MAX_FNAME
+#define MAXEXT		_MAX_EXT
+#endif
+
+/* KT - added check in case min is already defined */
 #ifndef min
 #define min(A,B)	((A)<=(B)?(A):(B))
 #endif
-
 extern char Break_Wish;
 
 char	cwdbuffer[256];
 
+char	*cl_string, *cm_string;	/* Clear Screen, Cursor Motion */
 
-void break_handler() {
+
+#if defined(WIN32) || defined(WIN64)
+
+char	termcap_buffer[1024];
+char	*term_entries;
+
+const char	perr_str[] = "terminal";
+#if 0
+void	break_handler();
+
+void disable_break() {
+/*   ^^^^^^^^^^^^^ */
+	signal (SIGINT,break_handler);		/* Ctrl-C */
+	/*        signal (SIGQUIT,break_handler);*/	/* Ctrl-\, hard interrupt */
+/*        signal (SIGTSTP,break_handler);*/	/* Ctrl-Z, suspend */
+}
+
+
+void break_handler () {
+/*   ^^^^^^^^^^^^^ */
+	Break_Wish = 1;
+	disable_break();
+}
+#endif
+
+
+
+
+
+
+void gotoxy(int col,int lin) {
+/*   ^^^^^^ */
+//	if (*cm_string!=0)
+//		printf ("%s",tgoto (cm_string,col-1,lin-1));
+} /*gotoxy*/
+
+
+/* usefull, but not necessary:
+#include <sys/filio.h>
+bool kbhit () {
+/ *   ^^^^^ * /
+long	x;  / * holds # of pending chars * /
+	fflush(stdout);
+	return((ioctl(0,FIONREAD,&x) < 0) ? 0 : x);
+} / *kbhit* /
+*/
+
+
+void clrscr() {
+/*   ^^^^^^ */
+	fflush(stdout);
+#if !defined(WIN32)
+	printf("%s",cl_string);
+#endif
+} /*clrscr*/
+
+#endif
+
+#if !defined(WIN32) && !defined(WIN64)
+int break_handler() {
 	Break_Wish = 1; /*TRUE*/;
+	return 1;   /* 0 = exit(); 1 = continue program */
 }
 
 void disable_break() {
-    signal (SIGINT,break_handler);
-	// ctrlbrk(break_handler);
+	/* not found under DJGPP! */
+	/* ctrlbrk(break_handler); */
 }
+#endif
+
+/* doesn't work */
+
+/*struct mstats core_statistics;*/
+
+long coreleft () {
+/*   ^^^^^^^^ */
+/*	core_statistics = mstats();
+	return core_statistics.bytes_free;*/
+	return 0;
+}
+
+/*****************
+  Terminal Access
+ *****************/
 
 char wait_for_key (int must_be_0, char must_be_TRUE) {
 /*   ^^^^^^^^^^^^ */
@@ -52,33 +149,61 @@ char	saved_path[MAXPATH];
 void save_path () {
 /*   ^^^^^^^^^
 Saves current drive and directory path */
+#if defined(WIN32) || defined(WIN64)
+	saved_drive = _getdrive();
+#else
 	saved_drive = getdisk();
+#endif
+
+#if defined(WIN32) || defined(WIN64)
+	_getcwd(saved_path,  MAXPATH);
+#else
 	getcwd(saved_path,MAXPATH);
+#endif
 }
 
 void rest_path () {
 /*   ^^^^^^^^^
 Restores saved drive and directory path */
+#if defined(WIN32) || defined(WIN64)
+	_chdrive(saved_drive);
+	_chdir(saved_path);
+#else
 	setdisk(saved_drive);
 	chdir(saved_path);
+#endif
+	
 }
 
 
+#if defined(WIN32) || defined(WIN64)
+struct _finddata_t glob_buffer;
+long	find_handle;
+#else
 struct ffblk glob_buffer;
+#endif
+
+
 char	glob_dir[MAXPATH];
 
-char *glob_file (char *pattern) {
+char *glob_file (char *pattern, int *type) {
 /*    ^^^^^^^^^ */
 static char
 	n[MAXPATH];
+
+#if  !defined(WIN32) && !defined(WIN64)
+int flags;
 char	drive[MAXDRIVE];
 char	dir[MAXDIR];
 char	name[MAXFILE];
 char	ext[MAXEXT];
-int	flags;
-
-	flags=fnsplit(pattern,drive,dir,name,ext);
+#endif
+char *find_name;
+int is_dir = 0;
 	*glob_dir=0;
+
+#if  !defined(WIN32) && !defined(WIN64)
+	flags=fnsplit(pattern,drive,dir,name,ext);
 	if (DRIVE & flags) {
 		strcpy(glob_dir,drive);
 		strcat(glob_dir,":");
@@ -86,38 +211,159 @@ int	flags;
 	if (DIRECTORY & flags) {
 		strcat(glob_dir,dir); 	/* included trailing "\" */
 	}
+#else
+	/* KT - MSDev doesn't have fnsplit function */
+	
+	/* pattern defines full path and filename with extension */
+	if (pattern!=NULL)
+	{
+		int i;
+		int pos;
 
+		/* searching from end of string find first directory seperator */
+		pos = 0;
+
+		for (i=strlen(pattern)-1; i>=0; i--)
+		{
+			if (pattern[i] == '\\')
+			{
+				pos = i+1;
+				break;	
+			}
+		}
+
+		/* copy string */
+		strncpy(glob_dir, pattern, MAXPATH);
+		glob_dir[MAXPATH-1] = '\0';
+	
+		/* if directory seperator is inside buffer, end string after seperator */
+		if (pos<MAXPATH)
+		{
+			glob_dir[pos] = '\0';
+		}
+	
+	}
+#endif
+	
+#if defined(WIN32) || defined(WIN64)
+	if (pattern == NULL)
+		return NULL;
+
+	find_handle = _findfirst(pattern, &glob_buffer);
+
+
+	if (find_handle == -1)
+	{
+		return NULL;
+	}
+	
+	find_name = glob_buffer.name;
+	is_dir = glob_buffer.attrib & _A_SUBDIR;
+
+#else
 	if (findfirst(pattern,&glob_buffer,0)) {
 		return NULL;
 	}
-	strcpy(n,glob_dir); strcat(n,glob_buffer.ff_name);
+
+	find_name = glob_buffer.ff_name;
+	is_dir = 0;
+#endif
+
+	*type = is_dir;
+
+	/* KT - changed strcpy to stop overwriting end of buffer */
+	strncpy(n,glob_dir, MAXPATH);
+	n[MAXPATH-1] = '\0';
+	
+	{
+		int BytesRemaining;
+
+		BytesRemaining = MAXPATH - strlen(n)-1;
+
+		if (BytesRemaining!=0)
+		{
+#if defined(WIN32) || defined(WIN64)
+			strncat(n,glob_buffer.name, BytesRemaining);
+#else
+            strncat(n,glob_buffer.ff_name, BytesRemaining);
+#endif
+            n[MAXPATH-1] = '\0';
+		}
+	}
+
 	return n;
 }
 
 
-char *glob_next () {
+char *glob_next (int *type) {
 /*    ^^^^^^^^^ */
 static char
 	n[MAXPATH];
+char *find_name;
+int is_dir;
 
+#if defined(WIN32) || defined(WIN64)
+	if (_findnext(find_handle, &glob_buffer)==-1)
+	{
+		_findclose(find_handle);
+
+		return NULL;
+	}
+
+	find_name = glob_buffer.name;
+	is_dir = glob_buffer.attrib & _A_SUBDIR;
+#else
 	if (findnext(&glob_buffer)) {
 		return NULL;
 	}
-	strcpy(n,glob_dir); strcat(n,glob_buffer.ff_name);
+
+	find_name = glob_buffer.ff_name;
+	is_dir = glob_buffer.ff_attrib & FA_DIREC;
+#endif
+
+	*type = is_dir;
+
+	/* KT - changed strcpy to stop overwriting end of buffer */
+	strncpy(n,glob_dir, MAXPATH);
+	n[MAXPATH-1] = '\0';
+	
+	{
+		int BytesRemaining;
+
+		BytesRemaining = MAXPATH - strlen(n)-1;
+
+		if (BytesRemaining!=0)
+		{
+#if defined(WIN32) || defined(WIN64)
+			strncat(n,glob_buffer.name, BytesRemaining);
+#else
+            strncat(n,glob_buffer.ff_name, BytesRemaining);
+#endif
+
+            n[MAXPATH-1] = '\0';
+		}
+	}
+	 
 	return n;
 }
+
 
 char* tmp_nam(char* buf) {
 /*    ^^^^^^^
 Calls tmpnam() and prepends the value of the %TEMP environment variable.
 Contrary to tmpnam(), <buf> must not be NULL! */
-char	*temp;
-char	name[INPUTLEN];
+char	name[FULL_IMAGENAME_LENGTH];
 
+/* KT: Under DJGPP, and Microsoft MSDEV, 
+tmpnam generates a path and filename for the temporary file! */
+
+#if 0
 	temp = getenv("TEMP");
 	if (temp==NULL)	strcpy(buf,".");
 	else		strcpy(buf,temp);
 	if (temp[strlen(temp)]!='\\') strcat(buf,"\\");
+#endif
+	/* this has a path prefix! */
 	tmpnam(name);
 	strcat(buf,name);
 	return buf;
@@ -125,13 +371,10 @@ char	name[INPUTLEN];
 
 
 void os_init() {
-/*   ^^^^^^^ */
-	// the screen is garbled, when 'screen buffer' (which is 300 by default)
-	// is greater than 255.
-	system("mode con lines=25");
+/*   ^^^^^^^
+Nothing to do for DOS */
 }
 
-int getkey(void);
 
 /**********************************************************************
 				History
@@ -140,7 +383,7 @@ int getkey(void);
 #define MaxHistSize 100
 
 int	hist_size = 0;  /* number of entries in history */
-int	hist_last = 0;  /* number of last entered entry */
+int	hist_last = 0;  /* number of last	ed entry */
 char    *history[MaxHistSize];	/* filled with NULLS */
 
 int add_history(char *line) {
@@ -161,6 +404,7 @@ char	*str;
 	return 0;
 }
 
+#if  !defined(WIN32) && !defined(WIN64)
 /**********************************************************************
 	The next lines in this file are insertions from ACTlib 1.7
 	(slightly modified)
@@ -182,7 +426,7 @@ char	*str;
 
 #define RETURN			0x0d
 #ifndef ENTER
-    #define ENTER                   RETURN
+#define ENTER                   RETURN
 #endif
 #define SPACE			0x20
 #define ESC			0x1b
@@ -387,7 +631,7 @@ int inputs( char *data, int maxLen, int timeout )
      if ( hist_used || len != oldLen )
 	{
 	 hist_used = False;
-	 gotoxy(Xpos, Ypos);
+	 gotoxy( Xpos, Ypos );
 	 cputs( data );
 	 for ( ; oldLen > len; oldLen-- ) cputs(" ");
 	 if ( oldLen < len ) oldLen = len;
@@ -406,28 +650,32 @@ int inputs( char *data, int maxLen, int timeout )
 
  _setcursortype( insert_mode ? _NORMALCURSOR : _SOLIDCURSOR );
 
+#ifndef _WIN32
 #pragma warn -sig
-	 for ( x = curPos - data + Xpos, y = Ypos;
+#endif
+     for ( x = curPos - data + Xpos, y = Ypos;
 	   x > ti.screenwidth;
 	   x -= ti.screenwidth, y++
 	 );
-	 gotoxy(x, y );
+     gotoxy( x, y );
+#ifndef _WIN32
 #pragma warn .sig
+#endif
 
-	 switch( c = getkey() )
-	 {
-	  case LEFT:
-	  case CTRL_B:
+     switch( c = getkey() )
+     {
+      case LEFT:
+      case CTRL_B:
 	 if ( curPos > data ) curPos--;
 	 break;
 
-	  case RIGHT:
-	  case CTRL_F:
+      case RIGHT:
+      case CTRL_F:
 	 if ( curPos < data + len ) curPos++;
 	 break;
 
-	  case UP:
-	  case CTRL_P:
+      case UP:
+      case CTRL_P:
 	 if (hist==-1) hist = hist_last;
 	 else          {hist--; hist = (hist<0? hist_size-1 : hist);}
 	 strcpy(data,history[hist]);
@@ -436,8 +684,8 @@ int inputs( char *data, int maxLen, int timeout )
 	 hist_used = True;
 	 break;
 
-	 case DOWN:
-	 case CTRL_N:
+     case DOWN:
+     case CTRL_N:
 	 if (hist==-1) break;
 	 else          hist = (hist+1)%hist_size;
 	 strcpy(data,history[hist]);
@@ -446,114 +694,114 @@ int inputs( char *data, int maxLen, int timeout )
 	 hist_used = True;
 	 break;
 
-	  case HOME:
-	  case CTRL_A:
+      case HOME:
+      case CTRL_A:
 	 curPos =  data;
 	 break;
 
-	  case END:
-	  case CTRL_E:
+      case END:
+      case CTRL_E:
 	 curPos = data + len;
 	 break;
 
-	  case BACKSPACE:
+      case BACKSPACE:
 	 if ( curPos > data )
-		{
-		 strcpy( curPos - 1, curPos );
-		 curPos--;
-		 len--;
-		}
+	    {
+	     strcpy( curPos - 1, curPos );
+	     curPos--;
+	     len--;
+	    }
 	 break;
 
-	  case CTRL_D:
-	  case DEL:
+      case CTRL_D:
+      case DEL:
 	 if ( curPos < data + len )
-		{
-		 strcpy( curPos , curPos + 1 );
-		 len--;
-		}
+	    {
+	     strcpy( curPos , curPos + 1 );
+	     len--;
+	    }
 	 break;
 
-	  case INSERT:
-	  case CTRL_V:
+      case INSERT:
+      case CTRL_V:
 	 insert_mode = ! insert_mode;
 	 _setcursortype( insert_mode ? _NORMALCURSOR : _SOLIDCURSOR );
 	 continue; /* break; */
 
-	  case ESC :
-	  case CTRL_U:
+      case ESC :
+      case CTRL_U:
 	 *data = '\0';
 	 curPos = data;
 	 len = 0;
 	 break;
 
-	  case CTRL_Z:
-	  case ENTER:
+      case CTRL_Z:
+      case ENTER:
 	 cputs( "\r\n" ); clreol();
 	 _setcursortype( _NORMALCURSOR );
 	 if (c==CTRL_Z) return -2;
 		   else return len;
 
-	  case CTRL_END:
-	  case CTRL_K:
+      case CTRL_END:
+      case CTRL_K:
 	 *curPos = '\0';
 	 len = strlen( data );
 	 break;
 
-	  case CTRL_HOME:
+      case CTRL_HOME:
 	 strcpy( data , curPos );
 	 curPos = data;
 	 len = strlen( data );
 	 break;
 
-	  default:
+      default:
 	 if ( c > 255 )
-	{
-	 break;
-	}
+	    {
+	     break;
+	    }
 
-		 if ( firstkey )
-			{
-			 *data = '\0';
-			 curPos = data;
-			 len = 0;
-			 ungetch( c );
-			 break;
-			}
+         if ( firstkey )
+            {
+             *data = '\0';
+             curPos = data;
+             len = 0;
+             ungetch( c );
+             break;
+            }
 
-		 if ( ! insert_mode )
-			{
-			 cprintf( "%c", c );
-			 *curPos++ = c;
-			 if ( curPos >= data + len )
-				{
-				 *curPos = '\0';
-				 len++;
-				}
-			 break;
-			}
+         if ( ! insert_mode )
+            {
+             cprintf( "%c", c );
+             *curPos++ = c;
+             if ( curPos >= data + len )
+                {
+                 *curPos = '\0';
+                 len++;
+                }
+             break;
+            }
 
-		 if ( len == maxLen )
-			{
-		 break;
-			}
+         if ( len == maxLen )
+            {
+	     break;
+            }
 
-		 memmove( curPos + 1, curPos, strlen(curPos) + 1 );
-		 *curPos++ = c;
-		 len++;
-		 break;
-	  }
+         memmove( curPos + 1, curPos, strlen(curPos) + 1 );
+         *curPos++ = c;
+         len++;
+         break;
+      }
 
-	  firstkey = False;
-	}
+      firstkey = False;
+    }
 }
 
-
+#endif
 
 /**********************************************************************
 	former name: GETKEY.C
  **********************************************************************/
-
+ 
 /*  Copyright (C) 1993   Marc Stern  (internet: stern@mble.philips.be)  */
 
 #include <conio.h>
@@ -576,6 +824,8 @@ int getkey( void )
  return car;
 }
 
+/* DOS DJGPP has getopt defined in unistd.h */
+#if defined(WIN32) || defined(WIN64)
 /**********************************************************************
 	The next lines of this file are insertions from Borland C++ 2.0
 	(slightly modified)
@@ -677,7 +927,7 @@ int	getopt(int argc, char *argv[], char *optionS)
 		if (0 == (ch = *(letP++))) {
 			optind++;  goto gopEOF;
 		}
-		if (':' == ch  ||  (optP = strchr(optionS, ch)) == NULL)
+		if (':' == ch  ||  (optP = strchr(optionS, ch)) == NULL)  
 			goto gopError;
 		if (':' == *(++optP)) {
 			optind++;
@@ -697,9 +947,9 @@ int	getopt(int argc, char *argv[], char *optionS)
 		return ch;
 	}
 gopEOF:
-	optarg = letP = NULL;
+	optarg = letP = NULL;  
 	return EOF;
-
+ 
 gopError:
 	optarg = NULL;
 	errno  = EINVAL;
@@ -707,3 +957,5 @@ gopError:
 		perror ("get command line option");
 	return ('?');
 }
+
+#endif

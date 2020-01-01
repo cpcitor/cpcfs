@@ -1,23 +1,39 @@
 
-/*
+/*				<<<<Last Modified: Thu Feb 08 15:08:32 1996>>>>
 ------------------------------------------------------------------------------
 
-    =====
-    CPCFS  --  t o o l s . c  --  Auxiliary functions
-    =====
+	=====
+	CPCfs  --  t o o l s . c  --  Auxiliary functions
+	=====
 
-    Version 0.85                    (c) Derik van Zuetphen
+	Version 0.85                    (c) February '96 by Derik van Zuetphen
 ------------------------------------------------------------------------------
 */
 
-#include <errno.h>
 
-#if DOS
-#include "conio.h"
-#include "dos.h"
+#ifdef DOS
+#if  !defined(WIN32) && !defined(WIN64)
+#include <ctype.h>
+#endif
 #endif
 
+
 #include "cpcfs.h"
+
+
+#if defined(WIN32) || defined(WIN64)
+#include <direct.h>
+#include <ctype.h>
+#endif
+
+#ifdef DOS
+extern long coreleft();
+#endif
+
+#ifdef LINUX
+#include <errno.h>
+#include <ctype.h>
+#endif
 
 
 /*************
@@ -46,8 +62,10 @@ void putcharm(int verb, char ch)  {
 /*   ^^^^^^^^ */
 	if (Verb >= verb) putchar(ch);
 }
+ 
+ 
 
-
+ 
 char *lower(char *s)  {
 /*    ^^^^^ */
 char	*p=s;
@@ -61,14 +79,18 @@ char	*p=s;
 char *upper(char *s)  {
 /*    ^^^^^ */
 char	*p=s;
-	while (*s) {
-		*s=toupper(*s);
+
+	while (*s) 
+	{
+		*s = toupper(*s);
 		s++;
 	}
+
+
 	return p;
 }
 
-
+ 
 char *append_suffix (char *name, char *suffix) {
 /*    ^^^^^^^^^^^^^
 Appends <suffix> to <name>, but not if the name already ends with <suffix>.
@@ -79,7 +101,7 @@ char	*p, *ds, *dot;
 	ds=dot=NULL;
 	while (*p) {
 		if (*p==DIRSEPARATOR)	ds=p;
-		if (*p=='.')		dot=p;
+		if (*p=='.')		dot=p;			
 		p++;
 	}
 	if ((dot==NULL)||(dot<ds)) {
@@ -88,8 +110,8 @@ char	*p, *ds, *dot;
 	}
 	return name;
 }
-
-
+ 
+ 
 int errorf (bool perr,const char *fmt, ...) {
 /*  ^^^^^^
 Writes a formatted errormessage to stderr and appends a system errormessage
@@ -103,14 +125,17 @@ va_list	args;
 	vfprintf(stderr,fmt,args);
 	va_end(args);
 	if (perr) {
-#if UNIX
+#if UNIX	
 		fprintf(stderr,": ");
 #endif
 /* DOS put always a colon before the error message, UNIX only if the argument
 to perror is not empty */
+		fputc(10,stderr);
 		perror("");
 	} else
+	{
 		fputc(10,stderr);
+	}
 	return -1;
 }
 
@@ -261,29 +286,32 @@ int	i;
 	if (Break_Wish) do_break();
 	if ((lineno==0) || (pagelen==0) || (Verb < 1)) return 0;
 	lineno++;
-	if (lineno+1>pagelen) {
-		printm(1,"-- M o r e --   ");
-		if (*valid_keys!=0) putcharm(1,'(');
-		for (i=0; i<strlen(valid_keys);i++) {
-			if (i>0) printm(1,", ");
-			switch (valid_keys[i]) {
-			case 'c': printm(1,"`c' = continous");	break;
-			case 'q': printm(1,"`q' = quit");	break;
-			case 'r': printm(1,"`r' = restart");	break;
-			default:  errorf(FALSE,"--==>>> nextline");
+	if (Interactive == TRUE)
+	{
+		if (lineno+1>pagelen) {
+			printm(1,"-- M o r e --   ");
+			if (*valid_keys!=0) putcharm(1,'(');
+			for (i=0; i<(int)strlen(valid_keys);i++) {
+				if (i>0) printm(1,", ");
+				switch (valid_keys[i]) {
+				case 'c': printm(1,"`c' = continous");	break;
+				case 'q': printm(1,"`q' = quit");	break;
+				case 'r': printm(1,"`r' = restart");	break;
+				default:  errorf(FALSE,"--==>>> nextline");
+				}
 			}
-		}
-		if (*valid_keys!=0) putcharm(1,')');
+			if (*valid_keys!=0) putcharm(1,')');
 
-		answer = tolower(wait_for_key(0,TRUE));
-		putcharm(1,10);
-		if (Break_Wish) do_break();
-		if (answer=='c' && strchr(valid_keys,'c')!=NULL) {
-			lineno=-1;
-			return 'c';
+			answer = tolower(wait_for_key(0,TRUE));
+			putcharm(1,10);
+			if (Break_Wish) do_break();
+			if (answer=='c' && strchr(valid_keys,'c')!=NULL) {
+				lineno=-1;
+				return 'c';
+			}
+			lineno=1;
+			if (strchr(valid_keys,answer)!=NULL) return answer;
 		}
-		lineno=1;
-		if (strchr(valid_keys,answer)!=NULL) return answer;
 	}
 	return 0;
 }
@@ -305,19 +333,32 @@ static	char str[INPUTLEN];
 }
 
 
-char *show_format (uchar sec_offset) {
+const char *show_format (DPB_list_entry *entry) {
 /*    ^^^^^^^^^^^ */
-static char result[20];
-	switch (sec_offset ) {
-		case SYSTEMFORMAT:	strcpy(result,"System Format"); break;
-		case DATAFORMAT:	strcpy(result,"Data Format"); break;
-		case IBMFORMAT: 	strcpy(result,"IBM Format"); break;
-		case VORTEXFORMAT: 	strcpy(result,"Vortex Format"); break;
-		default:		strcpy(result,"Unknown Format");
-	}
-	return result;
-}
+static char format[256];
 
+	format[0] = '\0';
+
+	if (entry!=NULL)
+	{
+		if (entry->ident!=NULL)
+		{
+			strcat(format, entry->ident);
+		}
+
+		strcat(format, " (");
+
+		if (entry->description!=NULL)
+		{
+			strcat(format, entry->description);
+		}
+		
+		strcat(format, ")");
+		return format;
+	}
+	
+	return "Unknown Format";
+}
 
 char *show_mode (int m)  {
 /*    ^^^^^^^^^ */
@@ -351,7 +392,7 @@ void expand_percent(char *from, char *to, int max) {
 /*   ^^^^^^^^^^^^^^
 WARNING: this function needs sprintf to return int, and not char* ! */
 bool	active = *disk_header.tag;
-char	buf[PATH_MAX];
+char	buf[256];
 char	*t, *t0;
 
 	t0 = t = Malloc(max+80);	/* 80 (>len(%V)) as overflow area */
@@ -400,17 +441,21 @@ char	*t, *t0;
 					*t++='#';
 				  break;
 			case 'c':
-			case 'C': t+=sprintf(t,"%s",getwd(buf));
-				  break;
+#if defined(WIN32) || defined(WIN64)
+            case 'C': t+=sprintf(t,"%s",_getcwd(buf,sizeof(buf)));
+#else
+			case 'C': t+=sprintf(t,"%s",getcwd(buf,sizeof(buf)));
+#endif
+				break;
 			case 'v': if (PATCHLEVEL==0)
 					t+=sprintf(t,"%d.%d",
 						MAJORVERSION,MINORVERSION);
 				  else
-					t+=sprintf(t,"%d.%d.%d",
+					t+=sprintf(t,"%d.%dpl%d",
 					MAJORVERSION,MINORVERSION,PATCHLEVEL);
 				  break;
-			case 'V': t+=sprintf(t,"%d.%d.%d",
-				MAJORVERSION,MINORVERSION,PATCHLEVEL);
+			case 'V': t+=sprintf(t,"%d.%dpl%d (%s)",
+				MAJORVERSION,MINORVERSION,PATCHLEVEL,stamp);
 				  break;
 			case '%': *t++='%'; break;
 			case '_': *t++=' '; break;
@@ -421,9 +466,24 @@ char	*t, *t0;
 			case 'Q': *t++='"'; break;
 			case 's':
 			case 'S': *t++=';'; break;
+/* KT - added an extra item to show copyright */
+			case 'W':
+				t+=sprintf(t, "%s", copyright);
+				break;
 			case 'M':
-                /*	showing the free memory is not the duty of an application these days. */
-				t+=sprintf(t,"%lu",0L); break;
+#if DOS 
+#if defined(WIN32) || defined(WIN64)
+				t+=sprintf(t,"%lu",coreleft()); break;
+					/* coreleft is def'ed in unix.c */
+					/* coreleft is def'ed in dos.c for WIN32 */
+#else
+				t+=sprintf(t,"%lu",coreleft()); break;
+					/* "%lu" if model > medium */
+#endif
+#else
+				t+=sprintf(t,"%lu",coreleft()); break;
+					/* coreleft is def'ed in unix.c */
+#endif
 			default : *t++='%'; *t++=*from; break;
 			}
 		}
@@ -514,7 +574,7 @@ int	i;
 /* scan extension part */
 	if (*p) strcpy(ext,p+1);
 
-
+	
 /* convert to upper case */
 	upper(root);
 	upper(ext);
@@ -535,7 +595,7 @@ Errorcode is 1 on error
 */
 char	*p;	/* temp pointer */
 #if DOS
-char	*r;
+char	*r, *q;
 int	i;
 #endif
 
@@ -573,6 +633,11 @@ int	i;
 		*r++ = *name++;
 	}
 	*r=0;
+	if (p!=NULL)
+	{
+		q=strchr(p,'.');
+		if (q) p=q;
+	}
 
 /* scan extension part */
 	if (*name) strncpy(ext,name+1,4);
@@ -608,7 +673,7 @@ char	key;
 		if (key=='r') {
 			fseek(file,0L,SEEK_SET);
 		}
-		if (key=='q') break;
+		if (key=='q') break;	
 	}
 	fclose(file);
 	return 0;
@@ -666,7 +731,7 @@ if <user> = -2, a * (wild user) is prepended.
 If <ext> = "", the last char is "."!
 <buf> must point to memory of at least 3+1+8+1+3+1=17 Byte (UUU:RRRRRRRR.EEE0).
 */
-
+	
 	*buf = 0;
 	if (user==-2) strcpy(buf,"*:");
 	if (user>=0) sprintf(buf,"%d:",user);
@@ -745,4 +810,4 @@ uchar	c;
 	}
 /*	*(p++) = '\n';*/
 	return line;
-}
+}	

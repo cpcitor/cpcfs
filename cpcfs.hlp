@@ -14,11 +14,11 @@ on one of the following general topics:
 ~commands~
 List of available commands in alphabetical order:
 
-!	?	attrib	bye	cd	close	cls	comment	copy	del
-dir	dira	dpb	dump	echo	era	exit	force	format	get
-help	lcd	ldir	map	mget	mode	mput	new	open	page
-prompt	put	quit	ren	source	stat	sysgen	type	user  verbosity
-
+!	?	attrib	bye	cd	clean	close	cls	comment	copy	del
+dir	dira	dpb	dump	echo	era	exit	force	format	formats
+get	help	lcd	ldir	map	mget	mode	mput	new		nuke
+open    label   page    prompt  put     quit    ren     source  stat
+type    user  verbosity
 
 Commands grouped according to functionality:
 
@@ -27,6 +27,7 @@ Transfer data:		get	mget	mode	mput	put	sysgen
 DOS access:		!	cd	lcd	ldir
 CP/M maintenance:	attrib	copy	comment	del	dir	dpb	dump
 			era	format	new	ren	stat	type
+Cleaning:		nuke	clean
 User interface:		?	bye	cls	echo	exit	force	help
 			verbosity	page	prompt	quit	source
 Obsolete:		dira	map
@@ -49,13 +50,11 @@ See also:
 ~variables~
 Used environment variables:
 
-	CPCFSHOME	directory for CPCFS.CFG and CPCFS.HLP, if differnet
-			from the directory where CPCFS.EXE resides.
 	PAGER		command to use for paging (default: internal pager)
 	TEMP		directory for temporary files (default: current)
 	COMSPEC		specifies the standard command processor for DOS
 
-PAGER must point to a program that expects its argument on the commandline,
+PAGER must point to a program that expects its argument on the commandline, 
 and not from stdin, so MORE.COM does not work. V. Buergs's famous LIST does
 not work the most time, I don't know why. I recommend LESS.
 
@@ -87,7 +86,7 @@ Used in commands:
 
 ~filenames~
 DOS filenames: <drive>:<path>\<root>.<extension>
-	* and ?, the normal DOS wildcards, are possible in <root>
+	* and ?, the normal DOS wildcards, are possible in <root> 
 	and <extension>.
 
 CP/M filenames: <userarea>:<root>.<extension>
@@ -97,7 +96,7 @@ Wildcards:
 	[a-z123]	a set of characters
 	[^0-9]		a negative set
 
-Note:	* may appear as user number => all users
+Note:	* may appear as user number => all users		
 
 Example: Files = {ABC.1, ABC.2, ABC.X, X.ABC, 1:USER.ONE}
 
@@ -110,7 +109,7 @@ Example: Files = {ABC.1, ABC.2, ABC.X, X.ABC, 1:USER.ONE}
 	1:		sometimes like 1:*.*
 
 ~invocation~
-Either call CPCFS in interactive mode:
+Either call CPCfs in interactive mode:
 
 	CPCFS
 
@@ -131,38 +130,43 @@ where
 	-s	stat	    ≥	-ns	The imagename must immediately follow
 	-x	source	    ≥	-nv	this switch. (e.g. CPCFS -ND FOO)
 
-Note: Options after -e are considered as options for CPCFS commands!
+Note: Options after -e are considered as options for CPCfs commands!
       Exitcodes are 0 (ok), 1 (error), or 2 (^C pressed)
 
 ~about~
-CPCFS - CPCEmu Filessystem Maintenance, Version 0.85
+CPCXfs - CPCEmu Filesystem Maintenance (Extended) 
+based on CPCfs - CPCEmu Filessystem Maintenance, Version 0.85 (Feb. 96)
 
-Copyright (c) 1997-2016, Derik van Zuetphen
-All rights reserved.
+This version has the same licence as the original. It has been put
+together from the sources of CPCfs, and has many bug fixes and enhancements.
+I did not see any new releases of CPCfs for a long time, and so I decided
+to put this release together. Thankyou to Frederic Herlem for extensive testing,
+and compiling a .DEF to be used with this version.
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+In the original CPCfs license, it states that changed versions should not be distributed.
+The aim of this release is not to anger Derik, but to provide other Amstrad users
+with a bug-fixed and enhanced version. I like this program, and think it is fantastic,
+but I experienced a few bad bugs resulting in corrupted images and incomplete files.
+I wanted others to be able to use this fantastic program.
 
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
+If Derik is reading this message, you are free to use all this code in a new
+official release of CPCfs.
 
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
+This version uses the CPCfs source code, and this is copyright Derik Van ZÅtphen.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Comments on this version should be sent to
+	amstrad@aiind.upv.es
+
+The original CPCfs has this license:
+
+This program is Freeware and copyright by Derik van ZÅtphen.
+You may distribute the whole package (zip-file), with or without an
+appropriate charge. You may not distribute changed versions.
+
+** This software is provided "as-is". No warranties of any kind are made! **
 
 Please send bug reports to
-	dz@426.ch
+	derik@pool.informatik.rwth-aachen.de
 
 ~background~
 Record:		the smallest piece of data accessible by CP/M (128 bytes)
@@ -179,11 +183,11 @@ The following keystrokes are possible while editing a commandline:
 	  Home, End		have the obvious meaning
 	* Cursor-Up, -Down	walk thru the history list
 	* Ctrl-Home, -End	delete to start/end of line
-	* Ctrl-Z		leave CPCFS
+	* Ctrl-Z		leave CPCfs
 	* ESC			delete commandline
 
 The traditonal EMACS contol codes are also possible (^B, ^F, ^V, ^D, ^H,
-^A, ^E, ^P, ^N, ^K, ^U).
+^A, ^E, ^P, ^N, ^K, ^U). These control codes are not available on Windows version.
 
 ~bugs~
 The following inconsistencies are intentional:
@@ -195,7 +199,7 @@ The following inconsistencies are intentional:
 	* your image file must not be readonly
 
 ~values~
-Numbers:	in C syntax, i.e. decimal, octal with leading "0",
+Numbers:	in C syntax, i.e. decimal, octal with leading "0", 
 		hexadecimal with leading "0x".
 		Example: USER 15 = USER 017 = USER 0xF
 
@@ -207,7 +211,7 @@ See also:
 
 ~put~
 PUT <options> <dos-filename> [<cpm-filename>]
-	Copies a file from DOS to CPC filesystem. If <cpm-filename> is
+	Copies a file from DOS to CPC filesystem. If <cpm-filename> is 
 	present, <dos-filename> is renamed to that name.
 PUT <options> <dos-filename> <userarea>:
 	Copies *one* file from DOS to a user area of the CP/M filesystem.
@@ -218,7 +222,7 @@ See also:
 
 ~get~
 GET <options> <cpm-filename> [<dos-filename>]
-	Copies a file from CPC to DOS filesystem. If <dos-filename> is
+	Copies a file from CPC to DOS filesystem. If <dos-filename> is 
 	present, <cpm-filename> is renamed while copying.
 GET <options> <cpm-filename>... <dos-path>
 	Copies some files form CPC to a DOS directory. <dos-path> must
@@ -251,36 +255,78 @@ See also:
 	options		filenames
 
 ~open~
-OPEN <file>
-	Load an image
+OPEN [-f <format id>] <file>
+	Load an image. Use -f to format the format to use. If -f is not
+	specified the format will be auto detected.
 
 ~close~
 CLOSE
 	Close the current image
 
+~clean~
+CLEAN
+	Clean disc image. 
+
+	A disc image that is cleaned will compress better in most cases, 
+	compared to the same disc image that has not been cleaned.
+
+	Clean works by nukeing all unused blocks to 0x0e5, and nukeing 
+	directory entries for deleted files.
+
+	There is no undo for this operation!
+
+	USE WITH CARE!
+
+
+~nuke~
+NUKE	[-f] <cpm-filespec>
+	Nuke a file from the disc.	
+	Ask for permission, if a file is R/O. Do not ask if -f is given.
+
+	The directory entries and all data blocks used by the file 
+	will be completely nuked to 0x0e5.
+	
+	Using this command will create a disk image that can compress better
+	than the same image with files deleted using DEL/ERA.
+
+	There is no undo for this operation!
+	
+	USE WITH CARE!
+
+	
+	
+
 ~new~format~
-NEW [-s | -d | -i | -v]  <imagename>
+NEW [-s | -d | -f <format id>] [-e] <imagename>
 FORMAT ...
 	Build a new empty image file
+	If "-e" is specified an Extended "EXTENDED" disk image will be created.
+	If "-e" is not specified a standard "MV - CPC" disk image will be created.
+	
 	The available formats are
 	  * -s  SYSTEM		169k net capacity + CP/M tracks
 	  * -d  DATA		178k net capacity		(default)
-	  * -i	IBM		154k net capacity + CP/M tracks
-	  * -v  VORTEX		708k net capacity + CP/M tracks
+	  * -f  <format id>	Format id from .DEF file
 
-Note: To access a vortex image from a CPC emulator you need the vortex ROMS!
+Note:
+
+1. To access formats other than SYSTEM or DATA from a CPC emulator
+you may need a ROM or program. (e.g. to access Vortex discs you may need
+the VORTEX ROM!)
+
+2. If the disk definition in the cpmdisks.def file has a label defined
+this will be written to the disk image after formatting (if found).
 
 See also:
-	sysgen	stat	dpb
-
-~sysgen~
-SYSGEN <file>
-	Writes the CP/M-System from <file> to current image.
-
-Note: The image must be in system format!
+        label  stat    dpb
+	
+~label~
+LABEL <file>
+        Writes the CP/M-System from <file> to the system tracks of the
+        current image.
 
 ~mode~
-MODE <mode>
+MODE <mode>            
 	Set transfer mode to either Binary, Text, or Auto.
 	  * Binary	the whole file is processed
 	  * Text	the file is processed up to the first Ctrl-Z
@@ -358,7 +404,7 @@ Example:
 COPY <options> <from-cpm-filename> <to-cpm-filename>
 COPY <options> <cpm-filespec>... <userarea>
 	The first form copies a file to a second file.
-	The second form copies a set of files to another user area with the
+	The second form copies a set of files to another user area with the 
 	same name.
 
 Example:
@@ -370,18 +416,15 @@ See also:
 
 ~type~
 TYPE <options> <cpm-filename>
-	Writes the content of a file to the screen. If in binary mode or
+	Writes the content of a file to the screen. If in binary mode or 
 	binary mode is detected, the content is translated to hexadecimal.
 
 Example:
 	TYPE TEXT		assumes detected textmode
 	TYPE -B TEXT		force the text to hexdump
 
-Options:
-	-f <dos-filename>	write output to a file, instead of screen
-
 See also:
-	options (except of -f)
+	options
 
 ~user~
 USER <number>[:]
@@ -405,7 +448,7 @@ files with PUT, GET, COPY, REN or if you try to DEL a readonly file.
 To see the current Force status use STAT.
 
 ~map~
-The MAP command will be absent in next versions. See DUMP -M
+The MAP command will be absent in versions. See DUMP -M
 
 ~dira~
 The DIRA command will be absent in next versions. See DUMP -D
@@ -420,8 +463,9 @@ Directory dump -- shows:
     attributes, block-pointer, last-entry tag "<<<" or next-entry-pointer ">##"
 
 Allocation dump -- shows for each sector:
-    $$	CP/M			      ≥	<num>	Used for file in entry <num>
-    DD	Directory		      ≥	--	Not used
+    $$$$	CP/M			      ≥	<num>	Used for file in entry <num>
+    DDDD	Directory/Allocated     ≥	--	Not used
+    -NA-	Unavailable for storage
 
 Data dump -- options:
     -b<block-number>		      ≥	-h<head-number>
@@ -446,8 +490,8 @@ See also:
 	!
 
 ~lcd~cd~
-CD <dos-drive&path>
-LCD <dos-drive&path>
+CD <dos-drive&path>              
+LCD <dos-dirve&path>              
 	Change the current DOS drive and/or directory.
 	This is *not* equivalent to !CD.
 
@@ -481,7 +525,7 @@ See also:
 ~source~
 SOURCE <scriptfile>
 	Execute the commands in <scriptfile>. The script CPCFS.CFG is
-	automatically executed at startup of CPCFS.
+	automatically executed at startup of CPCfs.
 
 Example:
 	SOURCE MY.CFG
@@ -501,7 +545,7 @@ The following special characters are used to describe the syntax
 The following special identifier are used:
 	<cpm-filename>, <dos-filename>	a filename without wildcards
 	<cpm-filespec>, <dos-filespec>	a filename with/without wildcards
-	<userarea>			a user number out of 0..15
+	<userarea>			a user number out of 0..15 
 
 See also:
 	filenames	options
@@ -515,7 +559,7 @@ See also:
 
 ~page~
 PAGE <lines>
-	If you are using the internal pager (i.e. the environment variable
+	If you are using the internal pager (i.e. the environment variable 
 	PAGER is not set), this command sets the number of lines the pager
 	should display per screen.
 
@@ -524,7 +568,7 @@ See also:
 
 ~verbosity~
 VERBOSITY <level>
-	Set verbosity of CPCFS:
+	Set verbosity of CPCfs:
 	  -1	no output at all
 	  0	only requested output
 	  1	+ prompt + error messages
@@ -552,7 +596,7 @@ See also:
 BYE
 EXIT
 QUIT
-	Leaves CPCFS.
+	Leaves CPCfs.
 	You can also type Ctrl-Z as a shortcut.
 
 ~dpb~
@@ -583,3 +627,4 @@ CLS
 	Clear screen.
 
 ~end-of-help~
+
