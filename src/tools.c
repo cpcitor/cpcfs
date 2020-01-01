@@ -251,6 +251,7 @@ pressed. */
 }
 
 
+#ifndef _LIBRARY_
 char nextline() {
 /*   ^^^^^^^^
 Anvance the line counter of the internal pager. Stop at a prompt, if the
@@ -287,6 +288,7 @@ int	i;
 	}
 	return 0;
 }
+#endif
 
 
 char *repstr(char c, int times) {
@@ -451,6 +453,7 @@ char	buf[256]; /* 3 lines should be enough */
 }
 
 
+#ifndef _LIBRARY_
 bool confirmed()  {
 /*   ^^^^^^^^^ */
 char	answer;
@@ -465,7 +468,7 @@ char	answer;
 		return (tolower(answer) == 'y');
 	}
 }
-
+#endif
 
 int parse_cpm_filename (char *name, int *user, char *root, char *ext) {
 /*  ^^^^^^^^^^^^^^^^^^
@@ -590,7 +593,7 @@ int	i;
 	return 0;
 }
 
-
+#ifndef _LIBRARY_
 int internal_pager(char *filename) {
 /*  ^^^^^^^^^^^^^^
 Display the file with stops after each screen */
@@ -639,6 +642,7 @@ int	err;
 
 	return 0;
 }
+#endif
 
 
 void str2mem(char *mem, char *str, int spc) {

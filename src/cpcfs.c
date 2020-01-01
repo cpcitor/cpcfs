@@ -153,9 +153,10 @@ DPB_type DPB_store[DPB_store_size] = {
 
 DPB_type *dpb = NULL;	/* pointer to current DPB */
 
-
+#ifndef _LIBRARY_
 int main (int argc, char **argv) {
 int	ui_main (int,char**);
 	ui_main (argc,argv);
 	exit(0);
 }
+#endif

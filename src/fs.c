@@ -850,6 +850,7 @@ int	res;
 }
 
 
+#ifndef _LIBRARY_
 int dir(char *pat, int mask) {
 /*  ^^^
 <mask> is a "bit-or" of the following bits:
@@ -1095,7 +1096,7 @@ footer:
 	free(array);
 	return 0;
 }
-
+#endif
 
 long delete(bool silent, char *pat) {
 /*   ^^^^^^
@@ -1107,12 +1108,14 @@ int	ent, i;
 
 
 /* warn, if <pat> contains *.* or is only usernumber */
+#ifndef _LIBRARY_
 	if (match("*\\*.\\**",pat) || match("*:",pat)) {
 		if (!silent && Verb > 0) {
 			printm(1,"Delete all in \"%s\"? ",pat);
 			if (!confirmed()) return 0;
 		}
 	}
+#endif
 
 	ent = glob_cpm_file(pat);
 	if (ent<0) {
@@ -1123,6 +1126,7 @@ int	ent, i;
 
 	while (ent>=0) {
 		freed = 0;
+#ifndef _LIBRARY_
 		if (directory[ent].attr & ATTR_R) {
 			if (!silent && Verb > 0) {
 				printm(1,"\"%u:%s\" readonly. Delete? ",
@@ -1133,6 +1137,7 @@ int	ent, i;
 				}
 			}
 		}
+#endif
 
 		if (!silent) printm(3,"Deleting \"%u:%s\": ",
 				directory[ent].user,directory[ent].name);
@@ -1371,11 +1376,15 @@ const char wild_fmt[] = "\"%s\" may not contain wildcards";
 
 /* check if already exists */
 	if (glob_cpm_file(to_full)>=0) {
+#ifndef _LIBRARY_
 		if (Verb > 0) {
 			printm(1,"\"%s\" already exists! Overwrite? ",to_full);
 			if (confirmed())	delete(TRUE,to_full);
 			else			return 0;
 		} else return errorf(FALSE,"\"%s\" already exists",to_full);
+#else
+		delete(TRUE,to_full);
+#endif
 	}
 
        	ent = glob_cpm_file(from_full);
@@ -1428,7 +1437,10 @@ Copies a file to a new file with another name.
 This preliminary version goes the way through put() and get() with a
 temporary file.
 Answer -1 on error. */
-
+#ifdef _LIBRARY_
+	//TODO: FMS - Disabled for library build. Always fails
+	return -1;
+#else
 char	tempname[INPUTLEN];
 int	err;
 
@@ -1449,6 +1461,7 @@ int	err;
 
 	unlink(tempname);
 	return 0;
+#endif
 }
 
 
@@ -1695,6 +1708,7 @@ uchar	*buf, *p;
 
 
 /* open DOS file */
+#ifndef _LIBRARY_
 	if (access(target,F_OK)==0) {
 		if (Verb > 0) {
 			printm(1,"\"%s\" already exists! "
@@ -1704,6 +1718,7 @@ uchar	*buf, *p;
 			}
 		}
 	}
+#endif
 	file=creat(target,0644);
 	if (file<0) return errorf(TRUE,"Cannot open \"%s\" for writing",target);
 
@@ -1838,6 +1853,7 @@ struct stat stat_buf;
 
 /* test on existence in CP/M directory */
 	if (glob_cpm_file(trg) >= 0) {
+#ifndef _LIBRARY_
 		if (Verb > 0) {
 			printm(1,"\"%s\" already exists! Overwrite? ",trg);
 			if (!confirmed())  {
@@ -1845,6 +1861,7 @@ struct stat stat_buf;
 				return -1;
 			}
 		}
+#endif
 		delete (TRUE,trg);
 	}
 

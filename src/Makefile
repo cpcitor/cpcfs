@@ -9,6 +9,9 @@ LDARGS	= $(LDOPT) -lreadline -lhistory -L /usr/lib/termcap -ltermcap
 
 HEADER=cpcfs.h unix.h
 OBJECTS=unix.o match.o tools.o fs.o ui.o cpcfs.o
+LIBOBJECTS=fs.o cpcfs.o tools.o match.o
+OUTDIR:=../output
+STATICLIB = $(OUTDIR)/libcpcfs.a
 
 default: makedoc cpcfs
 
@@ -32,9 +35,21 @@ strip: cpcfs makedoc
 
 clean:
 	-rm -f *.o
+	-rm -rf $(OUTDIR)
 
 distclean: clean
 	-rm -f cpcfs makedoc
 
 new: distclean
 	make
+
+$(OUTDIR):
+	@mkdir $(OUTDIR)
+
+$(STATICLIB): $(OUTDIR) $(LIBOBJECTS)
+	@$(eval LIBOBJS := $(shell find . -name \*.o))
+	ar rvs $(STATICLIB) $(LIBOBJECTS)
+	ranlib $(STATICLIB)
+
+staticlib: CFLAGS += -DUSE_READLINE=0 -D_LIBRARY_
+staticlib: $(STATICLIB)
