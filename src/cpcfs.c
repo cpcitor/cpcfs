@@ -453,7 +453,7 @@ DPB_list_entry	*dpb_check_if_matching_format_exists(DPB_list *list, DPB_type *ty
 	}
 
 	return NULL;
-}
+} 
 
 void	dpb_list_add_item(DPB_list *list,char *description, char *ident, DPB_type *dpb)
 {
@@ -551,4 +551,50 @@ int main (int argc, char **argv) {
 
 	return 0;
 }
+#else
+void cpcfs_init() {
+	/* initialise list */
+	dpb_list.first = NULL;
+
+	initialise();
+
+	/* KT - add default formats */
+	
+	/* data */
+	dpb_list_add_item(&dpb_list,"Data Format", "data", &data_dpb);
+	
+	/* system */
+	dpb_list_add_item(&dpb_list,"System Format", "system", &system_dpb);
+}
+
+void cpcfs_finish() {
+	dpb_list_delete(&dpb_list);
+}
+
+int cpcfs_getNfiles() {
+	int files = 0, i;
+	for (i=0;i<=dpb->DRM;i++) {
+		if (directory[i].first) {
+			files++;
+		}
+	}
+	return files;
+}
+
+char *cpcfs_fileName(int nFile) {
+	int i;
+	nFile++;
+	for (i=0;i<=dpb->DRM;i++) {
+		if (directory[i].first) {
+			nFile--;
+			if (nFile == 0)
+				break;
+		}
+	}
+	if (i <=dpb->DRM)
+		return directory[i].name;
+	else
+		return NULL;
+}
+
 #endif
