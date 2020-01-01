@@ -1,26 +1,24 @@
 
-/*
+/*				<<<<Last Modified: Thu Feb 08 15:08:45 1996>>>>
 ------------------------------------------------------------------------------
 
-    =====
-    CPCFS  --   u i . c  --  Main program, and Text Interface
-    =====
+	=====
+	CPCfs  --   u i . c  --  Main program, and Text Interface
+	=====
 
-    Version 0.85                    (c) Derik van Zuetphen
+	Version 0.85                    (c) February '96 by Derik van Zuetphen
 ------------------------------------------------------------------------------
 */
 
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #include "cpcfs.h"
 
-#if DOS
-#include "dos.h"
+#if defined(WIN32) || defined(WIN64)
+#include <direct.h>
+#include <io.h>
 #endif
 
+#include <ctype.h>
 /*********************************************************************
 			    Auxilaries
  *********************************************************************/
@@ -111,6 +109,13 @@ int cmd_close() {
 	return 0;
 }
 
+int cmd_abort() {
+	if (nbof_args!=0)	return cmd_error("ABANDON");
+
+	abandonimage();
+	return 0;
+}
+
 
 int cmd_cls() {
 /*  ^^^^^^^ */
@@ -177,7 +182,8 @@ const char errmsg[] = "\tCOPY [-f | -t | -b] <form-cpmname> <to-cpmname>\n"
 		      "\tCOPY [-f | -t | -b] <form-cpmspec>.. <userarea>";
 int	local_force, local_mode;
 char	optchar;
-
+root[0] = '\0';
+ext[0] = '\0';
 	if (inactive()) return 0;
 	if (nbof_args==0)
 		return cmd_error(errmsg);
@@ -187,7 +193,7 @@ char	optchar;
 	local_mode = mode;
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
 		switch (optchar) {
 		case 'f':	local_force = TRUE;	break;
 		case 't':	local_mode = M_TEXT;	break;
@@ -206,12 +212,23 @@ char	optchar;
 		if (trg_user==-2)
 			return errorf(FALSE,"No wildcards allowed in user");
 		for (i=optind;i<nbof_args;i++) {
-			copy_wild(arg[i],trg_user);
+			int result = copy_wild(arg[i],trg_user);
+			if (result!=0)
+			{
+				restore_force_mode();
+				return result;
+			}
 		}
 	} else {
+		int result;
 		if (REMAINING_ARGS!=2) return cmd_error(errmsg);
 		upper(arg[optind]);
-		copy_file(arg[optind],arg[optind+1]);
+		result = copy_file(arg[optind],arg[optind+1]);
+		if (result!=0)
+		{
+			restore_force_mode();
+			return result;
+		}
 	}
 
 	restore_force_mode();
@@ -226,13 +243,13 @@ int	what=DIR_DOUBLE;	/* see DIR_* in cpcfs.h */
 int	how=DIR_SORT;
 char	optchar;
 const char errmsg[] = "DIR [-l | -a | -w] [-u] [<cpm-filespec>]";
-
+pattern[0] = '\0';
 	if (inactive()) return 0;
 
 /* parse options */
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"awlu"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"awlu"))!= EOF) {
 		switch (optchar) {
 		case 'a':	what = DIR_AMSHEAD;	break;
 		case 'l':	what = DIR_LONG;	break;
@@ -296,7 +313,11 @@ int cmd_dpb() {
 	printm(0,"Heads = %d, ",dpb->HDS);
 	printm(0,"Tracks = %d, ",dpb->TRKS);
 	printm(0,"Sectors = %d\n",dpb->SECS);
-	printm(0,"Number of first sector = 0x%-2X\n",dpb->SEC1);
+	printm(0,"HD (side 1) = %d\n",dpb->side0_hd);
+	printm(0,"HD (side 2) = %d\n",dpb->side1_hd);
+
+//	printm(0,"ID of first sector (side 1) = 0x%-2X\n",dpb->SEC1_side1);
+	//printm(0,"ID of first sector (side 2) = 0x%-2X\n",dpb->SEC1_side2);
 	printm(0,"Bytes/sector           = %d\n",dpb->BPS);
 	printm(0,"Bytes/blocks           = %d\n",dpb->BLS);
 	printm(0,"Blocks/directory       = %d\n",dpb->DBL);
@@ -312,13 +333,14 @@ int	blk[2], hd[2], trk[2], sec[2];
 int	what=0;	/* 0=blkdump, 1=secdump, 2=dirdump, 3=map */
 int	how=1;	/* 0=on stdout, 1=on pager, 2=on file */
 int	ind=0;
-char	name[INPUTLEN] = "";
+char	name[INPUTLEN];
 char	optchar;
-FILE	*file;
+FILE	*file = stdout;
 int	i,j,k;
 const char errmsg[] = "DUMP (-d | -m | (-b#|-h#|-t#|-s#|-1|-2)... ) "
 						"[-f<dos-filename> | -c] ";
 
+name[0] = '\0';
 	if (inactive()) return 0;
 	if (nbof_args==0)	return cmd_error(errmsg);
 
@@ -329,7 +351,7 @@ const char errmsg[] = "DUMP (-d | -m | (-b#|-h#|-t#|-s#|-1|-2)... ) "
 /* parse options */
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"b:h:t:s:f:cdm12"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"b:h:t:s:f:cdm12"))!= EOF) {
 		switch (optchar) {
 		case 'b':	blk[ind]=atoxi(optarg);	what=0;	break;
 		case 'h':	hd[ind]=atoxi(optarg);	what=1;	break;
@@ -383,16 +405,12 @@ const char errmsg[] = "DUMP (-d | -m | (-b#|-h#|-t#|-s#|-1|-2)... ) "
 	if (blk[1]==-1) blk[1]=blk[0];
 	if (hd[1]==-1)  hd[1] =hd[0];
 	if (trk[1]==-1) {
-	  if (hd[1]==hd[0])
-	    trk[1]=trk[0];
-	  else
-	    trk[1]=dpb->TRKS-1;
+		if (hd[1]==hd[0]) trk[1]=trk[0];
+		else		  trk[1]=dpb->TRKS-1;
 	}
 	if (sec[1]==-1) {
-	  if (trk[1]==trk[0])
-	    sec[1]=sec[0];
-	  else
-	    sec[1]=dpb->SECS-1;
+		if (trk[1]==trk[0]) sec[1]=sec[0];
+		else		    sec[1]=dpb->SECS-1;
 	}
 
 /* do the output */
@@ -453,6 +471,55 @@ int cmd_echo () {
 	return 0;
 }
 
+int cmd_nuke() {
+/*  ^^^^^^^ */
+long	freed = 0;
+int	files = 0;
+int	i;
+char	optchar;
+int	local_force;
+const char errmsg[] = "NUKE [-f] <cpm-filespec>...";
+
+	if (inactive()) return 0;
+	if (nbof_args==0) 	return cmd_error(errmsg);
+
+/* parse options */
+	local_force = force;
+	opterr = 0;	/* no errormessages in getopt */
+	optind = FIRST_OPTIND;
+    while ((optchar=getopt(nbof_args+1,arg,"f"))!= EOF) {
+		switch (optchar) {
+		case 'f':	local_force = TRUE;	break;
+		case '?':	return cmd_error(errmsg);
+		}
+	}
+
+	if (REMAINING_ARGS==0)
+		return cmd_error(errmsg);
+
+	set_force_mode(local_force,9999);
+	for (i=optind;i<=nbof_args;i++) {
+		freed += nuke(FALSE,arg[i]);
+		files++;	/* actually filespecs, not files!! */
+	}
+	printm(2,"Total: %ld Bytes\n",freed);
+
+	restore_force_mode();
+	put_directory();
+	return (freed==0) ? -1 : 0;
+}
+
+
+int cmd_clean() {
+/*  ^^^^^^^ */
+	if (inactive()) return 0;
+
+	clean();
+
+	put_directory();
+	return 0;
+}
+
 
 int cmd_era() {
 /*  ^^^^^^^ */
@@ -470,7 +537,7 @@ const char errmsg[] = "(DEL|ERA) [-f] <cpm-filespec>...";
 	local_force = force;
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"f"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"f"))!= EOF) {
 		switch (optchar) {
 		case 'f':	local_force = TRUE;	break;
 		case '?':	return cmd_error(errmsg);
@@ -489,7 +556,7 @@ const char errmsg[] = "(DEL|ERA) [-f] <cpm-filespec>...";
 
 	restore_force_mode();
 	put_directory();
-	return 0;
+	return (freed == 0) ? -1 : 0;
 }
 
 
@@ -523,13 +590,16 @@ char	path[INPUTLEN];
 char	root[INPUTLEN];
 char	ext[INPUTLEN];
 long	done;
-char	*src = "";
+char	*src = NULL;
 int	i;
 const char errmsg[] = "\tGET [-f | -t | -b] <cpm-filename> [<dos-filename>]\n"
 		      "\tGET [-f | -t | -b] <cpm-filename>... <dos-path>";
 int	local_force, local_mode;
 char	optchar;
-
+trg[0] = '\0';
+path[0] = '\0';
+root[0] = '\0';
+ext[0] = '\0';
 	if (inactive()) return 0;
 	if (nbof_args==0) {
 		return cmd_error(errmsg);
@@ -540,7 +610,7 @@ char	optchar;
 	local_mode = mode;
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
 		switch (optchar) {
 		case 'f':	local_force = TRUE;	break;
 		case 't':	local_mode = M_TEXT;	break;
@@ -615,7 +685,7 @@ char	line[INPUTLEN];
 FILE	*file;
 bool	found = FALSE;
 bool	ok = FALSE;
-
+line[0] = '\0';
 	if (nbof_args>1) return cmd_error("HELP or HELP <topic>");
 	else if (nbof_args==0) strcpy(topic,"~nothing~");
 	else {
@@ -652,40 +722,120 @@ bool	ok = FALSE;
 
 int cmd_lcd() {
 /*  ^^^^^^^ */
-char	buf[PATH_MAX];
-int	err;
+char	buf[256];
+int		index;
+
+
+int	err=0;
 #if DOS
-char	*p;
+int i;
 #endif
 
-	if (nbof_args==0)
-		printm(0,"Working directory is \"%s\"\n",getwd(buf));
+
+	/* KT - added extra checks for null and empty filename - I don't
+	know if it would get into here with a filename like that, so I added
+	it just in case it did*/
+	if ((nbof_args==0) || (arg[1]==NULL) || (strlen(arg[1])==0))
+	{
+		printm(0,"Working directory is \"%s\"\n",
+			 getcwd(buf, sizeof(buf)));
+		return 0;
+	}
 	else if (nbof_args>1) {
-		return cmd_error("(CD|LCD) <dos-drive&directory>");
+		return cmd_error("(CD|LCD) <((dos-drive&directory)|directory)>");
 	} else {
+
+	/* KT - changed parsing of lcd command */
+	index = 0;
+
 #if DOS
-		if (arg[1][1]==':') {
-			setdisk(toupper(arg[1][0])-'A');
-			p=arg[1]+2;
-		} else {
-			p=arg[1];
-		}
-		if (p[1]!=0 && p[strlen(p)-1]==DIRSEPARATOR) {
-			p[strlen(p)-1] = 0;
-		}
-		err = *p==0? 0 : chdir(p);
+	/* check for drive specified ":" */
+
+	for (i=0; i<strlen(arg[1]); i++)
+	{
+		if (arg[1][i] == ':')
+		{
+			/* possible drive specification entered */
+			if (i==1)
+			{
+				unsigned char drive_string[4];
+
+				drive_string[0] = toupper(arg[1][0]);
+				drive_string[1] = ':';
+				drive_string[2] = '\\';
+				drive_string[3] = '\0';
+
+				/* assume first letter is a drive specification */
+#if defined(WIN32) || defined(WIN64)
+		//		_chdrive(toupper(arg[1][0])-'A');
+				_chdir(drive_string);
 #else
-		if (arg[1][1]!=0 && arg[1][strlen(arg[1])-1]==DIRSEPARATOR) {
-			arg[1][strlen(arg[1])-1] = 0;
-		}
-		err = chdir(arg[1]);
+				setdisk(toupper(arg[1][0])-'A');
+				chdir(drive_string);
 #endif
-		if (err) {
+				index = 2;
+
+				/* is there extra chars? */
+				if (arg[1][2]!='\0')
+				{
+					/* yes */
+
+					/* is this char a directory seperator? */
+					if (arg[1][2]==DIRSEPARATOR)
+					{
+						/* yes, skip it */
+						index=3;
+					}
+				}
+				break;
+
+			}
+			else
+			{
+				/* bad path */
+				index = -1;
+			}
+
+		}
+	}
+
+	/* error with drive specification? */
+	if (index==-1)
+	{
+		return errorf (FALSE,"I cannot cd to \"%s\"!",arg[1]);
+	}
+#endif
+
+	/* copy remainder of directory name into buf */
+	strncpy(buf, &arg[1][index], 256);
+	buf[255] = '\0';
+
+	if (strlen(buf)>0)
+	{
+		/* if end of string is a directory seperator, remove it
+		only if there are more chars */
+		/* handles lcd "\" and lcd "bob\" now */
+		if ((buf[strlen(buf)-1]==DIRSEPARATOR) && (strlen(buf)!=1))
+			buf[strlen(buf)-1] = 0;
+
+		if (buf!=NULL)
+		{
+#if defined(WIN32) || defined(WIN64)
+		err = _chdir(buf);
+#else
+		err = chdir(buf);
+#endif
+		}
+
+		if (err)
+		{
 			return errorf (FALSE,"I cannot cd to \"%s\"!",arg[1]);
 		}
-		printm(2,"Working directory is now \"%s\"\n",getwd(buf));
 	}
+
+	printm(2,"Working directory is now \"%s\"\n",getcwd(buf,sizeof(buf)));
 	return 0;
+	}
 }
 
 
@@ -693,7 +843,7 @@ int cmd_ldir() {
 /*  ^^^^^^^^ */
 char	buf[INPUTLEN];
 int	i;
-	*buf = 0;
+	buf[0] = '\0';
 	strcat(buf,LDIRCOMMAND);
 	for (i=1;i<=nbof_args;i++) {
 		strcat(buf," ");
@@ -710,7 +860,7 @@ int cmd_map() {
 /*  ^^^^^^^ */
 	execute_cmd("dump -m");
 	printm(1,"\nMAP will be obsolete in future versions! "
-		 "Use DUMP -M instead!\n");
+		 "Use DUMP -MB instead!\n");
 	return 0;
 }
 
@@ -727,7 +877,8 @@ long	done=0,
 const char errmsg[] = "MGET [-f | -t | -b] <cpm-filespec>...";
 int	local_force, local_mode;
 char	optchar;
-
+src[0] = '\0';
+trg[0] = '\0';
 	if (nbof_args==0) 	return cmd_error(errmsg);
 
 /* parse options */
@@ -735,7 +886,7 @@ char	optchar;
 	local_mode = mode;
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
 		switch (optchar) {
 		case 'f':	local_force = TRUE;	break;
 		case 't':	local_mode = M_TEXT;	break;
@@ -748,11 +899,13 @@ char	optchar;
 
 	set_force_mode(local_force,local_mode);
 
+	if (inactive ())
+		return 0;
+
 	for (i=optind;i<=nbof_args;i++) {
 		ent = glob_cpm_file(arg[i]);
 		if (ent<0) {
 			return errorf(FALSE,"\"%s\" not found",arg[i]);
-			continue;
 		}
 		while (ent>=0) {
 /* prepare CP/M name */
@@ -760,7 +913,7 @@ char	optchar;
 							directory[ent].name);
 
 /* prepare DOS name */
-			strcpy(trg,(char*)directory[ent].name);
+			strcpy(trg,(signed char*)directory[ent].name);
 			lower(trg);
 			if (trg[strlen(trg)-1]=='.') trg[strlen(trg)-1]=0;
 
@@ -831,7 +984,10 @@ const char errmsg[] = "MPUT [-f | -t | -b] <dos-filespec>...";
 int	local_force, local_mode;
 char	optchar;
 int	i;
-
+int type;
+path[0] = '\0';
+rootname[0] = '\0';
+extension[0] = '\0';
 	if (inactive()) return 0;
 	if (nbof_args==0)  {
 		return cmd_error(errmsg);
@@ -842,7 +998,7 @@ int	i;
 	local_mode = mode;
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
 		switch (optchar) {
 		case 'f':	local_force = TRUE;	break;
 		case 't':	local_mode = M_TEXT;	break;
@@ -857,31 +1013,42 @@ int	i;
 
 
 	for (i=optind;i<=nbof_args;i++) {
-		src = glob_file(arg[i]);
+		src = glob_file(arg[i], &type);
 		files = 0;
 		while (src!=NULL) {
-			parse_filename(src,&drive,path,rootname,extension);
-			strcpy(trg,rootname);
-			if (*extension) {
-				strcat(trg,".");
-				strcat(trg,extension);
+
+			/* KT - added type. !=0 if directory, ==0 if file */
+			if (type==0)
+			{
+				parse_filename(src,&drive,path,rootname,extension);
+				strcpy(trg,rootname);
+				if (*extension) {
+					strcat(trg,".");
+					strcat(trg,extension);
+				}
+
+				printm(2,"Putting \"%s\": ",src);
+				done = put(src,trg);
+				if (done>=0) {
+					printm(2,"%ld Bytes\n",done);
+					total += done;
+					files++;
+				}
+				else if (done == -1)
+				{
+					printm(2, "[skipped]\n");
+					restore_force_mode();
+					return -1;
+				}
+				else 
+				{	/* done==-2 */
+					printm(2,"[aborted]\n");
+					restore_force_mode();
+					return -1;
+				}
 			}
 
-			printm(2,"Putting \"%s\": ",src);
-			done = put(src,trg);
-			if (done>=0) {
-				printm(2,"%ld Bytes\n",done);
-				total += done;
-				files++;
-			} else if (done==-1)
-				printm(2,"[skipped]\n");
-			else {	/* done==-2 */
-				printm(2,"[aborted]\n");
-				restore_force_mode();
-				return 1;
-			}
-
-			src=glob_next();
+			src=glob_next(&type);
 		}
 		if (files==0)  {
 			printm(1,"\"%s\" not found!\n",arg[i]);
@@ -897,29 +1064,150 @@ int	i;
 	return 0;
 }
 
+void print_formats_available(void);
 
-int cmd_new() {
-/*  ^^^^^^^ */
-DPB_type *dpb;
-char	name[INPUTLEN];
-const char errmsg[] = "(NEW|FORMAT) [-s | -d | -i | -v]  <imagename>";
-char	optchar;
+/* KT - added so we have a list of formats supported */
+int cmd_formats()
+{
+	printm(2,"Formats supported:\n");
+
+	print_formats_available();
+
+	return 0;
+}
+
+int file_exists(char *name)
+{
+	int handle;
+	int exists = 0;
+
+	handle = open(name, O_RDONLY, 0);
+
+	if (handle>=0)
+	{
+		exists = 1;
+		close(handle);
+	}
+
+	return exists;
+}
+
+int cmd_label() {
+	int result = 0;
+const char errmsg[] = "LABEL <label filename>";
+unsigned char *LabelData;
+unsigned long LabelDataLength;
 
 	if (nbof_args==0) {
 		return cmd_error(errmsg);
 	}
 
+	if (REMAINING_ARGS!=1)
+		return cmd_error(errmsg);
+
+	/* load the label file */
+	LoadLabelFile(arg[optind],&LabelData, &LabelDataLength);
+
+	if (LabelData!=NULL)
+	{
+		/* write label to current disk */
+		result = write_label(dpb, LabelData,LabelDataLength);
+
+		/* free data */
+		free(LabelData);
+
+		if (result != 0)
+			return result;
+	}
+	else
+	{
+		printm(2, "Failed to load \"%s\". Label failed.\n", arg[optind]);
+	}
+
+	return 0;
+}
+
+
+int cmd_new() {
+/*  ^^^^^^^ */
+DPB_list_entry *entry = NULL;
+char	name[INPUTLEN];
+const char errmsg[] = "(NEW|FORMAT) [-f <format name> | -s | -d] [-e]  <imagename>";
+char	optchar;
+const char *default_format_name = "DATA";
+int		write_extended_image = 0;
+int result = 0;
+name[0] = '\0';
+	if (nbof_args==0) {
+		return cmd_error(errmsg);
+	}
+
+	/* attempt to find default format */
+	entry = get_dpb_entry_from_format_name(default_format_name);
+
 /* parse options */
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	dpb = &DPB_store[DATA_DPB];
-	while ((optchar=getopt(nbof_args+1,arg,"sdiv"))!= EOF) {
+/*	dpb = &DPB_store[DATA_DPB]; */
+/* KT changed so format names can be specified */
+    while ((optchar=getopt(nbof_args+1,arg,"fsde"))!= EOF) {
+/*  while ((optchar=getopt(nbof_args+1,arg,"sdiv"))!= EOF) { */
 		switch (optchar) {
-		case 's':	dpb = &DPB_store[SYSTEM_DPB]; break;
-		case 'd':	dpb = &DPB_store[DATA_DPB]; break;
-		case 'i':	dpb = &DPB_store[IBM_DPB]; break;
-		case 'v':	dpb = &DPB_store[VORTEX_DPB]; break;
+
+
+		case 'e':
+		{
+			write_extended_image = 1;
+		}
+		break;
+
+		case 'f':
+		{
+			char *format_name = arg[optind];
+
+			upper(format_name);
+			entry = get_dpb_entry_from_format_name(format_name);
+			optind++;
+			if (entry == NULL)
+			{
+				printm(2, "Format \"%s\" not available. Format failed.\n", format_name);
+				return -1;
+			}
+
+		}
+		break;
+
 		case '?':	return cmd_error(errmsg);
+
+			/* specified system format */
+		case 's':
+		{
+			const char *format_name = "SYSTEM";
+			entry = get_dpb_entry_from_format_name(format_name);
+			if (entry == NULL)
+			{
+				printm(2, "Format \"%s\" not available. Format failed.\n", format_name);
+				return -1;
+			}
+
+
+		}
+		break;
+
+		/* specified data format */
+		case 'd':
+		{
+			entry = get_dpb_entry_from_format_name(default_format_name);
+			if (entry == NULL)
+			{
+				printm(2, "Format \"%s\" not available. Format failed.\n", default_format_name);
+				return -1;
+			}
+		}
+		break;
+
+		default:
+			return cmd_error(errmsg);
 		}
 	}
 	if (REMAINING_ARGS!=1)
@@ -929,40 +1217,156 @@ char	optchar;
 	strcpy(name,arg[optind]);
 	append_suffix(name,"dsk");
 
-	if (access(name,F_OK)==0) {
+	/* if no format found, quit */
+	if (entry==NULL)
+	{
+		printm(2, "No formats available. Format failed!\n");
+		return -1;
+	}
+
+/*	if (access(name,F_OK)==0)*/
+	if (file_exists(name))
+	{
 		if (Verb > 0) {
 			printm(1,"\"%s\" already exists! Overwrite? ",name);
 			if (!confirmed())  {
-				return 0;
+				return -1;
 			}
 		}
 	}
 
-	if (format(name,dpb)) return 0;
+	result = format(name, entry, write_extended_image);
+	if (result != 0)
+		return result;
 
-	open_image(name);	/* reopen and initialize */
+	dpb = &entry->dpb;
+	dpb_list_entry = entry;
+
+	result = open_image(name, 0);	/* reopen and initialize */
+	if (result != 0)
+		return result;
+
+	if (dpb->label_data!=NULL)
+	{
+		result = write_label(dpb,dpb->label_data, dpb->label_data_length);
+		if (result != 0)
+			return result;
+	}
+
 	return 0;
 }
 
+/* set format */
+int	set_format(char *format_name)
+{
+	DPB_list_entry *entry;
+
+	entry = get_dpb_entry_from_format_name(format_name);
+	if (entry==NULL)
+	{
+		printm(2, "Format \"%s\" not available. Open failed.\n", format_name);
+		return 0;
+	}
+
+	dpb_list_entry = entry;
+	dpb = &entry->dpb;
+
+	return 1;
+}
+
+const char *open_command_string = "OPEN [ -f <format name> | -d | -s ] <image-file>";
 
 int cmd_open() {
 /*  ^^^^^^^^ */
 char	buf[INPUTLEN];
-
-
+int		auto_detect;
+char	optchar;
+int result = 0;
+buf[0] = '\0';
 	if (nbof_args==0) {
 		if (*disk_header.tag)
 			printm(0,"Image in use is \"%s\"\n",imagename);
 		else
-			printm(0,"No Image loaded!\n");
+		{
+			printm(0, "Image \"%s\" not loaded", imagename);
+			return -1;
+		}
 	}
-	else if (nbof_args>1) {
-		return cmd_error("OPEN <image-file>");
+	else if (nbof_args>3) {
+		return cmd_error(open_command_string);
 	}
 	else {
-		strcpy(buf,arg[1]);
+		/* moved to here */
+		/* dpb is setup with the new format . If
+		close_image remained in open_image it would
+		write the directory back in the new format that was selected :( */
+		/* here it will not corrupt anything */
+		if (*disk_header.tag) close_image();
+
+
+		/* KT - added f option to force a disk format with specified IDENT */
+		/* - added back -d and -s to force data and system standard formats */
+		auto_detect = 1;
+
+		opterr = 0;	/* no errormessages in getopt */
+		optind = FIRST_OPTIND;
+        while ((optchar=getopt(nbof_args+1,arg,"fsd"))!= EOF) {
+			switch (optchar) {
+			case 'd':
+			{
+				char *format_name = "DATA";
+
+				if (set_format(format_name)==0)
+					return 0;
+
+				auto_detect = 0;
+			}
+			break;
+
+			case 's':
+			{
+				char *format_name = "SYSTEM";
+
+				if (set_format(format_name)==0)
+					return 0;
+
+				auto_detect = 0;
+			}
+			break;
+
+
+
+			case 'f':
+			{
+				char *format_name = arg[optind];
+
+				upper(format_name);
+
+				if (set_format(format_name)==0)
+					return 0;
+
+				optind++;
+
+
+				auto_detect = 0;
+
+			}
+			break;
+
+		case '?':	return cmd_error(open_command_string);
+		}
+	}
+
+	if (REMAINING_ARGS!=1)
+		return cmd_error(open_command_string);
+
+		strncpy(buf,arg[optind], INPUTLEN);
+		buf[INPUTLEN-1]='\0';
+
 		append_suffix(buf,"dsk");
-		open_image(buf);
+		result = open_image(buf, auto_detect);
+		if (result != 0)
+			return result;
 	}
 	return 0;
 }
@@ -992,7 +1396,15 @@ int cmd_prompt() {
 		return cmd_error("PROMPT <string>");
 	}
 
-	strcpy(prompt,arg[1]);
+	if (arg[1]!=NULL)
+	{
+		strncpy(prompt,arg[1], INPUTLEN);
+		prompt[INPUTLEN-1] = '\0';
+	}
+	else
+	{
+		strcpy(prompt,">");
+	}
 	return 0;
 }
 
@@ -1009,7 +1421,11 @@ const char errmsg[] = "\tPUT [-f | -t | -b] <dos-filename> [<cpm-filename>]\n"
 		      "\tPUT [-f | -t | -b] <dos-filename> [<userarea>]\n";
 int	local_force, local_mode;
 char	optchar;
-
+int result = 0;
+trg[0] = '\0';
+rootname[0] = '\0';
+extension[0] = '\0';
+path[0] = '\0';
 	if (inactive()) return 0;
 	if (nbof_args==0)  {
 		return cmd_error(errmsg);
@@ -1020,7 +1436,7 @@ char	optchar;
 	local_mode = mode;
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
-	while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"ftb"))!= EOF) {
 		switch (optchar) {
 		case 'f':	local_force = TRUE;	break;
 		case 't':	local_mode = M_TEXT;	break;
@@ -1056,12 +1472,18 @@ char	optchar;
 	done = put(arg[optind],trg);
 	if (done>=0)
 		printm(2,"%ld Bytes\n",done);
-	else if (done==-1)
-		printm(2,"[skipped]\n");
+	else if (done == -1)
+	{
+		printm(2, "[skipped]\n");
+		result = -1;
+	}
 	else /* done==-2 */
-		printm(2,"[aborted]\n");
+	{
+		printm(2, "[aborted]\n");
+		result = -2;
+	}
 	restore_force_mode();
-	return 0;
+	return result;
 }
 
 
@@ -1074,7 +1496,8 @@ char	root[INPUTLEN], ext[INPUTLEN];
 
 const char errmsg[] = "\tREN <from-cpm-filespec> <to-cpm-filespec>\n"
 		      "\tREN <from-cpm-filespec>... <userarea>";
-
+root[0] = '\0';
+ext[0] = '\0';
 	if (inactive()) return 0;
 	if (nbof_args<2) {
 		return cmd_error(errmsg);
@@ -1086,14 +1509,18 @@ const char errmsg[] = "\tREN <from-cpm-filespec> <to-cpm-filespec>\n"
 		if (trg_user==-2)
 			return errorf(FALSE,"No wildcards allowed in user");
 		for (i=1;i<nbof_args;i++) {
-			ren_wild(arg[i],trg_user);
+			int result = ren_wild(arg[i],trg_user);
+			if (result < 0)
+				return result;
 		}
 	} else {
 		if (nbof_args!=2) return cmd_error(errmsg);
-		ren_file(arg[1],arg[2]);
+		int result = ren_file(arg[1],arg[2]);
+		if (result < 0)
+			return result;
 	}
 
-	update_directory();
+	update_directory(1);
 	put_directory();
 	return 0;
 }
@@ -1143,16 +1570,36 @@ const char errmsg[] ="Error executing \"%s\"";
 	return 0;
 }
 
+extern int image_type;
 
 int cmd_stat() {
 /*  ^^^^^^^^ */
-char	buf[256];
+	char	*image_type_name;
+	char	buf[256];
+
 	if (nbof_args!=0) return cmd_error("STAT");
 
 	putcharm(0,10);
 	if (*disk_header.tag) {
 		printm(0,"Image File     : %s\n",imagename);
-		printm(0,"Format         : %s\n",show_format(cur_format));
+
+		/* KT - added image type */
+		image_type_name = "<unknown>";
+
+		if (image_type==0)
+		{
+			image_type_name = "STANDARD";
+		}
+
+		if (image_type==1)
+		{
+			image_type_name = "EXTENDED";
+		}
+
+		printm(0,"Image Type     : %s\n", image_type_name);
+
+/*		printm(0,"Format         : %s\n",show_format(cur_format));*/
+		printm(0,"Format         : %s\n",show_format(dpb_list_entry));
 		putcharm(0,10);
 		printm(0,"CP/M           : ");
 		if (dpb->SYS) {
@@ -1186,7 +1633,7 @@ char	buf[256];
 	}
 
 	printm(0,"Prompt=\"%s\";  ",prompt);
-	printm(0,"Local directory=\"%s\"\n", getwd(buf));
+	printm(0,"Local directory=\"%s\"\n", getcwd(buf,sizeof(buf)));
 	printm(0,"Verbosity=%d;  ",Verb);
 	printm(0,"Page length=%d;  ",pagelen);
 	printm(0,"Mode=%s;  ",show_mode(mode));
@@ -1198,15 +1645,20 @@ char	buf[256];
 	return 0;
 }
 
-
+#if 0
 int cmd_sysgen() {
 /*  ^^^^^^^^^^ */
 	if (inactive()) return 0;
 	if (nbof_args!=1) return cmd_error("SYSGEN <dos-filename>");
 
 	if (dpb->OFS == 0) {
+		/* KT */
 		return errorf(FALSE,"No system tracks reserved in %s",
-						show_format(cur_format));
+						show_format(dpb_list_entry));
+
+
+/*		return errorf(FALSE,"No system tracks reserved in %s",
+						show_format(cur_format)); */
 	}
 
 	if (dpb->SYS) {
@@ -1224,7 +1676,7 @@ int cmd_sysgen() {
 	sysgen(arg[1]);
 	return 0;
 }
-
+#endif
 
 int cmd_type() {
 /*  ^^^^^^^^
@@ -1234,7 +1686,7 @@ char	outname[INPUTLEN];
 char	tempname[INPUTLEN];
 char	*cpmname;
 char	optchar;
-FILE	*outfile;
+FILE	*outfile = stdout;
 int	tempfile;
 int	local_mode;
 int	how=1;		/* 0=on stdout, 1=on pager, 2=on file */
@@ -1242,8 +1694,9 @@ int	counter=0;
 int	i, r;
 int	err;
 uchar	*buf;
-const char errmsg[] = "TYPE [-f <dos-filename> | -c | -t | -b] <cmp-filename>";
-
+const char errmsg[] = "TYPE [-f | -c | -t | -b] <cmp-filename>";
+outname[0] = '\0';
+tempname[0] = '\0';
 	buf = block_buffer;	/* a shortcut */
 
 	if (inactive()) return 0;
@@ -1253,7 +1706,7 @@ const char errmsg[] = "TYPE [-f <dos-filename> | -c | -t | -b] <cmp-filename>";
 	opterr = 0;	/* no errormessages in getopt */
 	optind = FIRST_OPTIND;
 	local_mode = mode;
-	while ((optchar=getopt(nbof_args+1,arg,"f:ctb"))!= EOF) {
+    while ((optchar=getopt(nbof_args+1,arg,"f:ctb"))!= EOF) {
 		switch (optchar) {
 		case 'f':	strcpy(outname,optarg);	how=2;	break;
 		case 'c':	how=0;	break;
@@ -1296,25 +1749,31 @@ const char errmsg[] = "TYPE [-f <dos-filename> | -c | -t | -b] <cmp-filename>";
 	if (err==-1) {
 		restore_force_mode();
 /*		return errorf(FALSE,"\"%s\" not found",cpmname);*/
+		fclose(outfile);
 		return -1;
 	}
 
+#ifdef WIN32
+	tempfile=_open(tempname,O_RDONLY|O_BINARY);
+#else
 	tempfile=open(tempname,O_RDONLY|O_BINARY);
+#endif
 	if (tempfile==-1) {
 		errorf(TRUE,"I cannot read \"%s\"",tempname);
 		restore_force_mode();
+		fclose(outfile);
 		return -1;
 	}
 
 
 	r=read(tempfile,buf,(dpb->BLS));
 	if (local_mode==M_AUTO) {
-		local_mode = detectmode((char*)buf,max((dpb->BLS),r));
+		local_mode = detectmode((signed char*)buf,max((dpb->BLS),r));
 	}
 
 	while (r>0) {
 		if (local_mode==M_TEXT) {
-			for (i=0;i<r;i++) {
+			for (i=0;i<(dpb->BLS);i++) {
 				err=putc(buf[i],outfile);
 				if (err<0) break;
 			}
@@ -1390,16 +1849,18 @@ int	v;
 			  User Interface
  *********************************************************************/
 
-#define NBOFCMDS	40
+#define NBOFCMDS	44
 struct {
 	char	*name;
 	int	(*proc)();
 	} command[NBOFCMDS] = {
 		{"!",		cmd_spawn },
 		{"?",		cmd_help },
+		{"abort",	cmd_abort },
 		{"attrib",	cmd_attrib },
 		{"bye",		cmd_exit },
 		{"cd",		cmd_lcd },
+		{"clean",	cmd_clean },
 		{"close",	cmd_close },
 		{"cls",		cmd_cls },
 		{"copy",	cmd_copy },
@@ -1414,8 +1875,10 @@ struct {
 		{"exit",	cmd_exit },
 		{"force",	cmd_force },
 		{"format",	cmd_new },
+		{"formats",	cmd_formats },
 		{"get",		cmd_get },
 		{"help",	cmd_help },
+		{"label",	cmd_label },
 		{"lcd",		cmd_lcd },
 		{"ldir",	cmd_ldir },
 		{"map",		cmd_map },
@@ -1423,6 +1886,7 @@ struct {
 		{"mode",	cmd_mode },
 		{"mput",	cmd_mput },
 		{"new",		cmd_new },
+		{"nuke",	cmd_nuke },
 		{"open",	cmd_open },
 		{"page",	cmd_page },
 		{"prompt",	cmd_prompt },
@@ -1431,7 +1895,7 @@ struct {
 		{"ren",		cmd_ren },
 		{"source",	cmd_source },
 		{"stat",	cmd_stat },
-		{"sysgen",	cmd_sysgen },
+/*		{"sysgen",	cmd_sysgen }, */
 		{"type",	cmd_type },
 		{"user",	cmd_user },
 		{"verbosity",	cmd_verbosity},
@@ -1446,9 +1910,11 @@ char	userbuffer[INPUTLEN];
 char	*line;
 char	spawn[] = "!";
 int	i;
-
+buffer[0] = '\0';
+userbuffer[0] = '\0';
 	Break_Wish = FALSE;
 	strncpy(buffer,input,INPUTLEN-1);
+	buffer[INPUTLEN - 1] = '\0';
 #if DOS
 	line=strchr(buffer,13);
 	if (line) *line=0;
@@ -1457,7 +1923,7 @@ int	i;
 	nbof_args=0;
 	if (!line) return 0;
 	for (;;) {
-		while ((*line==' ')||(*line=='\n')||(*line=='\t')||*line=='\r')
+		while ((*line==' ')||(*line=='\n')||(*line=='\t'))
 			line++;				/*skip white*/
 		if (*line==0) break;
 		if (*line=='#') break;			/*comment*/
@@ -1481,7 +1947,7 @@ int	i;
 			*line++ = 0;			/* replace quote */
 		} else {
 			while (*line!=' ' && *line!='\n' && *line!='\t'
-			  && *line!=0 && *line!='\r')
+			  && *line!=0)
 				line++;
 			if (*line==0) break;
 			else *line++=0;			/*set end-of-arg*/
@@ -1507,8 +1973,7 @@ int	i;
 
 	for (i=0;i<NBOFCMDS;i++) {
 		if (strcmp(command[i].name,arg[0])==0) {
-			(command[i].proc)();
-			return 0;
+			return (command[i].proc)();
 		}
 	}
 	return errorf(FALSE,"%s: Unknown Command!",arg[0]);
@@ -1520,9 +1985,13 @@ int execute_cmd (char *input) {
 Execute commands separated by ";". */
 char	*p;
 	for (;;) {
+		int result;
 		p = strchr(input,';');
 		if (p) *p=0;
-		execute_one_cmd(input);
+		result = execute_one_cmd(input);
+		if (result != 0)
+			return result;
+
 		if (!p) break;
 		input = p+1;
 	}
@@ -1544,12 +2013,20 @@ int	rl_bind_key();		/* where is the prototype??? */
 	os_init();
 	strcpy(prompt,"cpcfs> ");
 	*disk_header.tag=0;
+	dpb = NULL;
+	dpb_list_entry = NULL;
+
 /*	cur_trk = -1;	set in fs.c */
-	DPB_store[USER_DPB] = DPB_store[DATA_DPB]; /* set default user DPB */
+/* KT - removed */
+/*	DPB_store[USER_DPB] = DPB_store[DATA_DPB]; *//* set default user DPB */
 	pagelen=25;
+#if  !defined(WIN32) && !defined(WIN64)
 	disable_break();
 	Break_Wish = FALSE;
-	mode = M_AUTO;
+#endif
+	/* mode = M_AUTO; */
+	/* startup in binary mode by default */
+	mode = M_BIN;
 	force = FALSE;
 #if DOS
 	_fmode = O_BINARY;
@@ -1559,18 +2036,30 @@ int	rl_bind_key();		/* where is the prototype??? */
 	rl_bind_key ('\t', rl_insert);
 #endif
 
-        p = getenv("CPCFSHOME");
-        if (p) {
-		strcpy(installpath,p);
-		installpath[strlen(installpath)]= DIRSEPARATOR;
-		installpath[strlen(installpath)+1]= 0;
-	} else {
-/* works only for DOS, in Unix argv[0] may be a relative path,
-more precisely: BCC has an absolute path in argv[0], where gcc has not */
-		strcpy(installpath,argv0);
-		p = strrchr(installpath,DIRSEPARATOR);
-		if (p!=NULL) *(++p) = 0;
-		else	     installpath[0] = 0;
+/* works only for DOS */
+	strncpy(installpath,argv0, INPUTLEN);
+	installpath[INPUTLEN-1] = '\0';
+
+	/* remove last '\' */
+	p = strrchr(installpath,DIRSEPARATOR);
+	if (p!=NULL) *(++p) = 0;
+	else	     installpath[0] = 0;
+
+	/* KT: It appears that sometimes, argv will only contain the filename of the program.
+	In this case, installpath would be empty and the help file could not be opened if
+	it was not in the current directory */
+	/* the following checks for this, and sets up the directory from the current working
+	directory. I don't know how I can get the location of this file using ANSI C functions,
+	when I find out, I'll fix this properly! */
+	if (installpath[0]==0)
+	{
+		char local_string[2];
+
+		local_string[0] = DIRSEPARATOR;
+		local_string[1] = '\0';
+		getcwd(installpath, INPUTLEN);
+		strcat(installpath, local_string);
+		installpath[INPUTLEN-1] = '\0';
 	}
 }
 
@@ -1579,7 +2068,7 @@ int execute_file (char *name) {
 /*  ^^^^^^^^^^^^ */
 FILE	*file;
 char	line[INPUTLEN];
-
+line[0] = '\0';
 	if ((file=fopen(name,"r")) == NULL) {
 		return errorf(TRUE,"\"%s\" not found",name);
 	}
@@ -1595,11 +2084,13 @@ void read_cfg_file() {
 
 char	name[INPUTLEN];
 int	notfound;
-
-	strcpy(name,CONFIGNAME);
+name[0] = '\0';
+	strncpy(name,CONFIGNAME,INPUTLEN);
+	name[INPUTLEN-1] = '\0';
 	notfound = access(name,R_OK);
 	if (notfound) {
-		strcpy(name,installpath);
+		strncpy(name,installpath, INPUTLEN);
+		name[INPUTLEN-1] = '\0';
 		strcat(name,CONFIGNAME);
 		notfound = access (name,R_OK);
 		if (notfound)  {
@@ -1609,9 +2100,55 @@ int	notfound;
 	execute_file(name);
 }
 
+/* fill buffer with up to buffer_length chars */
+char	*gets_with_length(char *buffer, int buffer_length)
+{
+	int ch;
+	int count = 0;
+
+	if (feof(stdin))
+		return NULL;
+
+	if (!feof(stdin))
+	{
+		do
+		{
+			/* get character from standard input */
+			ch = getchar();
+
+			/* if eof */
+			if (ch==EOF)
+			{
+				/* end string and exit */
+				buffer[count] = '\0';
+				return buffer;
+			}
+			else
+			{
+				if ((ch!=10) && (ch!=13))
+				{
+					/* store char and update count */
+					buffer[count] = ch;
+					count++;
+				}
+			}
+		}
+		while ((count!=(buffer_length-2)) && (ch!=10) && (ch!=13));
+	}
+
+	buffer[count] = '\0';
+
+	return buffer;
+}
+
 
 void interaction (char *argv0) {
 /*   ^^^^^^^^^^^ */
+
+#if defined(WIN32) || defined(WIN64)
+char	prompt_buf[INPUTLEN];
+char	*line;
+#else
 #if USE_READLINE && UNIX
 char	prompt_buf[INPUTLEN];
 char	*line;
@@ -1622,11 +2159,37 @@ int	len;
 #else
 char	line[INPUTLEN];
 #endif
+#endif
 
 	read_cfg_file();
 
 	setjmp(break_entry);
 	for (;;) {
+#if defined(WIN32) || defined(WIN64)
+		*prompt_buf = 0;
+		if (Verb >= 1) expand_percent(prompt,prompt_buf,INPUTLEN);
+		printf("%s",prompt_buf);
+		*prompt_buf=0;
+		line = gets_with_length(prompt_buf, INPUTLEN);
+
+//		if (prompt_buf[0]!='\0')
+//		{
+		//line = gets(prompt_buf);
+		if (line==NULL) {
+			printm(3,"[Quit]\n");
+			execute_cmd("exit");
+		}
+		/*if (line && *line)	add_history(line);*/
+
+		if (prompt_buf[0]!='\0')
+		{
+			add_history(prompt_buf);
+		}
+		execute_cmd(prompt_buf);
+
+//		execute_cmd (line);
+//		free(line);
+#else
 #if USE_READLINE && UNIX
 		*prompt_buf = 0;
 		if (Verb >= 1) expand_percent(prompt,prompt_buf,INPUTLEN);
@@ -1652,8 +2215,9 @@ char	line[INPUTLEN];
 		execute_cmd(line);
 #else  /* ! USE_READLINE */
 		echom(1,prompt);
-		if (fgets(line,INPUTLEN,stdin))
-			execute_cmd(line);
+		gets_with_length(line,INPUTLEN);
+		execute_cmd(line);
+		#endif
 #endif
 	}
 }
@@ -1663,10 +2227,11 @@ char	line[INPUTLEN];
 void usage (bool err) {
 /*   ^^^^^ */
 char	buf[INPUTLEN];
+buf[0] = '\0';
 	if (err) {
 		printm(1,"Error in command line!\n\n");
 	} else {
-		printm(1,"CPCFS - CPCEmu Filessystem Maintenance\n");
+		printm(1,"CPCfs - CPCEmu Filessystem Maintenance\n");
 		expand_percent("%V",buf,INPUTLEN);
 		printm(1,"   %s\n\n",buf);
 		printm(1,"SYNOPSIS:\n");
@@ -1698,14 +2263,14 @@ char	buf[INPUTLEN];
 
 void ui_main (int argc, char **argv) {
 /*   ^^^^^^^
-Main function for CPCFS based on Text User Interface */
+Main function for CPCfs based on Text User Interface */
 
 char	line[INPUTLEN];
 int	i;
 bool	more_switches = TRUE;
-
+line[0] = '\0';
 	init(argv[0]);
-
+	
 /* no arguments => interactive mode */
 	if (argc==1) {
 		Interactive = TRUE;
@@ -1713,10 +2278,64 @@ bool	more_switches = TRUE;
 		exit(0);
 	}
 
+	for (i=1;i<argc;i++)
+    {
+		/* fix for linux. If end of line is \r then strip it.
+		this allows text files from windows to be used. */
+		size_t nLength = strlen(argv[i]);
+		if (nLength!=0)
+        {
+            char ch = argv[i][nLength-1];
+            if ((ch=='\r') || (ch=='\n'))
+            {
+                argv[i][nLength-1]='\0';
+            }
+        }
+	}
+
 	Interactive = FALSE;
-/* only filename => dir all */
-	if ((argc==2) && argv[1][0]!='-') {
-		strcpy(line,"open "); strcat(line,argv[1]);
+
+    /* -o <format> must come as first parameter */
+    char *format = NULL;
+    int startArgc = 1;
+    if (argc>=2)
+    {
+        if (argv[1][0]=='-')
+        {
+            if (tolower(argv[1][1]=='o'))
+            {
+                if (argc>=3)
+                {
+                    // forcing format..
+                    format = argv[2];
+                    startArgc = 3;
+                }
+                else
+                {
+                    printf("Disk format not passed on command-line for parameter 'o'\n");
+                    exit(1);
+                }
+            }
+        }
+    }
+
+/* we want to be able to force format */
+
+/* allowed: */
+/* <filename> */
+/* -o <format> <filename> */
+/* result -> dir all */
+	if (startArgc==(argc-1) && argv[startArgc][0]!='-') {
+		strcpy(line,"open");
+		if (format)
+        {
+            /* force format */
+            strcat(line," -f ");
+            strcat(line,format);
+        }
+        strcat(line," \"");
+        strcat(line,argv[startArgc]);
+		strcat(line,"\"");
 		if (execute_cmd(line))		exit(1);
 		if (execute_cmd("dir *:*.*"))	exit(1);
 		exit(0);
@@ -1724,14 +2343,21 @@ bool	more_switches = TRUE;
 
 /* execute commandline */
 	strcpy(line,"open");	/* if no command is given */
-	for (i=1;i<argc;i++) {
+    if (format)
+    {
+        /* force format */
+        strcat(line," -f ");
+        strcat(line,format);
+    }
+
+	for (i=startArgc;i<argc;i++) {
 		if (more_switches && argv[i][0]=='-') {
 			if (i>1) {
 				if (execute_cmd(line)) {
 					exit(1);
 				}
 			}
-			*line = 0;
+			line[0] = 0;
 			switch (tolower(argv[i][1])) {
 			case 'g': strcpy(line,"get"); break;
 			case 'p': strcpy(line,"put"); break;
@@ -1757,19 +2383,31 @@ bool	more_switches = TRUE;
 			case 'e': more_switches = FALSE; break;
 			case 'd': strcpy(line,"dir"); break;
 			case 'x': strcpy(line,"source"); break;
+			case 'o':
+                break;
 			case 'h':
 			case '?': usage(FALSE); exit(0);
 			default:  usage(TRUE); exit(1);
 			}
 		} else {
-                        if (strlen(line)+strlen(argv[i])+2 > INPUTLEN) {
-                                errorf(FALSE,"Commandline too long (>%d chars)", INPUTLEN);
-                                exit(1);
-                        }
-			strcat(line," ");
+			if (more_switches)
+			{
+				strcat(line," \"");
+			}
+			else
+			{
+				strcat(line," ");
+			}
 			strcat(line,argv[i]);
+			if (more_switches)
+			{
+				strcat(line,"\"");
+			}
 		}
 	}
-	execute_cmd(line);
+	if (execute_cmd(line))
+	{
+		exit(1);
+	}
 	execute_cmd("close");
 }

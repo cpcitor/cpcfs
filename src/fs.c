@@ -1,61 +1,127 @@
-
-/*
+/*				<<<<Last Modified: Thu Feb 08 15:08:10 1996>>>>
 ------------------------------------------------------------------------------
 
-    =====
-    CPCFS  --  f s . c  --	Managing the Filesystem
-    =====
+	=====
+	CPCfs  --  f s . c  --	Manageing the Filesystem
+	=====
 
-    Version 0.85		  	(c) Derik van Zuetphen
+	Version 0.85		  	(c) February '96 by Derik van Zuetphen
 ------------------------------------------------------------------------------
 */
 
-#if DOS
+#include <sys/stat.h>
+
+#ifdef WIN64
+#include <direct.h>
 #include <io.h>
 #endif
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/stat.h>
+#if defined(WIN32) || defined(WIN64)
+#include <direct.h>
+#include <io.h>
+#endif
 
 #include "cpcfs.h"
-#include "match.h"
+
+#ifdef DOS
+#if  !defined(WIN32) && !defined(WIN64)
+#endif
+#endif
+
 
 /****** Variables ******/
 
 int	cur_trk = -1;		/* flag for no track loaded */
-int	cur_hd = 0;
+int	cur_hd = -1;
 int	cur_blk = -1;
+/* KT - added directory dirty flag - directory is written only if it has changed! */
+int directory_dirty = 0;
+/* KT - added track dirty flag - track is written only if it has changed! */
+int track_dirty = 0;
 
+int image_type = 0;
 
 bool tag_ok () {
 /*   ^^^^^^ */
-	return	(strncmp("MV - CPC",(char*)disk_header.tag,8)==0);
-}
 
-
-void alloc_block(int blk,int file) {
-/*   ^^^^^^^^^^^
-<file> is only informational, real CP/M uses bitmaps */
-	if (file >= 0xFF) file = 0xFE;	/* FF marks a free block */
-	if (blk > dpb->DSM)
-		printm(1,"Warning: Directory entry %d currupt!\n",file);
+	/* KT - 27/04/2000 - Support for Extended disk image */
+	if (strncmp("EXTENDED", (signed char *)disk_header.tag,8)==0)
+	{
+		image_type = 1;
+		return TRUE;
+	}
 	else
-		blk_alloc[blk]=file;
+	if (strncmp("MV - CPC",(signed char*)disk_header.tag,8)==0)
+	{
+		image_type = 0;
+		return TRUE;
+	}
+
+	return FALSE;
 }
+
+const char *accessing_invalid_block_message = "Warning, attempting to access invalid block!";
+
+void alloc_block(int blk) {
+/*   ^^^^^^^^^^^ */
+
+	unsigned long blk_byte_offset;
+	unsigned long blk_bit_offset;
+
+  /* KT - if a disc was opened and the format was not detected correctly, then
+	a invalid blk could be passed to this routine. Previously this attempted
+	to read off the end of the array and cause an error. I've added this check
+	to stop that from occuring and alerting this fact to the user */
+	if ((blk<0) || (blk>=(dpb->DSM+1)))
+	{
+		errorf(FALSE, accessing_invalid_block_message);
+		return;
+	}
+
+	blk_byte_offset = blk>>3;
+	blk_bit_offset = blk & 0x07;
+
+	blk_alloc[blk_byte_offset]|=(1<<blk_bit_offset);
+}
+
+
 
 
 void free_block(int blk) {
 /*   ^^^^^^^^^^ */
-	if (blk <= dpb->DSM)
-		blk_alloc[blk]=0xFF;
+
+	unsigned long blk_byte_offset;
+	unsigned long blk_bit_offset;
+
+	if ((blk<0) || (blk>=(dpb->DSM+1)))
+	{
+		errorf(FALSE, accessing_invalid_block_message);
+		return;
+	}
+
+	blk_byte_offset = blk>>3;
+	blk_bit_offset = blk & 0x07;
+
+	blk_alloc[blk_byte_offset]&=~(1<<blk_bit_offset);
 }
 
 
 bool is_free_block(int blk) {
 /*   ^^^^^^^^^^^^^ */
-	return blk_alloc[blk]==0xFF;
+
+	unsigned long blk_byte_offset;
+	unsigned long blk_bit_offset;
+
+	if ((blk<0) || (blk>=(dpb->DSM+1)))
+	{
+		errorf(FALSE, accessing_invalid_block_message);
+		return FALSE;
+	}
+
+	blk_byte_offset = blk>>3;
+	blk_bit_offset = blk & 0x07;
+
+	return (bool)((blk_alloc[blk_byte_offset]&(1<<blk_bit_offset))==0);
 }
 
 
@@ -64,7 +130,8 @@ void calc_allocation () {
 int	i;
 	allocated_blks = 0;
 	free_blks = 0;
-	for (i=dpb->DBL; i<=dpb->DSM; i++)
+	/* KT; removed dpb->DBL because directory blocks will already be allocated */
+	for (i=0; i<dpb->DSM; i++)
 		if (is_free_block(i)) free_blks++;
 		else allocated_blks++;
 	percentage=100*allocated_blks/(float)(allocated_blks+free_blks);
@@ -82,6 +149,83 @@ bool inactive () {
 }
 
 
+
+/* KT - added support for different block orders */
+
+void	calc_t_s_h(int blk,int *track, int *sector, int *head)
+{
+	int t,s,h;
+
+	unsigned long byte_offset;
+	unsigned long sector_offset;
+
+	t = -1;
+	s = -1;
+	h = -1;
+
+	/* calc byte offset from block index and bytes per block */
+	byte_offset = blk*dpb->BLS;
+	/* calc sector offset using sector size */
+	sector_offset = byte_offset/dpb->BPS;
+
+	/* calculate sector index within track by taking remainder after dividing by number of sectors
+	per track (0-dpb->SECS). Sector ID is added on when sector is accessed! */
+	s = sector_offset % dpb->SECS;
+
+	/* calculate track offset by dividing by number of sectors */
+	t = (sector_offset / dpb->SECS) + dpb->OFS;
+
+	/* order system for blocks */
+	switch (dpb->order)
+	{
+		/* track 0 side 0, track 1 side 0... track n side 0, track n side 1, track n-1 side 1 ... track 0 side 1 */
+		case ORDER_CYLINDERS:
+		{
+		 /* calc side */
+			h = t/dpb->TRKS;
+
+			/* odd side */
+			if (h & 1)
+			{
+				/* tracks in reverse */
+				t = dpb->TRKS - (t % dpb->TRKS) - 1;
+			}
+			else
+			{
+				/* tracks in order */
+				t = t % dpb->TRKS;
+			}
+		}
+		break;
+
+		/* track 0 side 0, track 0 side 1, track 1 side 0, track 1 side 1... track n side 0, track n side 1*/
+		case ORDER_SIDES:
+		{
+			/* calc side */
+			h = t % dpb->HDS;
+			/* calc track */
+			t = t/dpb->HDS;
+		}
+		break;
+
+		/* track 0 side 0, track 1 side 0... track n side 0, track 0 side 1, track 1 side 1....track n side 1 */
+		case ORDER_EAGLE:
+		{
+			/* calc side */
+			h = t / dpb->TRKS;
+
+			/* calc track */
+			t = t % dpb->TRKS;
+		}
+		break;
+	}
+	*track = t;
+	*sector = s;
+	*head = h;
+}
+
+
+#if 0
 /* Calculate track, sector, and head number of the first sector of block
 <blk>.
 
@@ -129,13 +273,44 @@ int hd_calc(int blk) {
 	return ((long)blk*dpb->BLS/dpb->BPS + dpb->OFS*dpb->SECS)
 		/ dpb->SECS % dpb->HDS;
 }
+#endif
 
+
+/* TO BE FIXED ! */
 
 int blk_calc(int hd, int trk, int sec) {
 /*  ^^^^^^^^
 Return the blocknumber of position <hd>, <trk>, <sec> or -1, if it is a
 reserved position
 */
+#if 0
+	switch (dpb->order)
+	{
+		/* track 0 side 0, track 1 side 0... track n side 0, track n side 1, track n-1 side 1 ... track 0 side 1 */
+		case ORDER_CYLINDERS:
+		{
+
+
+
+		}
+		break;
+
+		case ORDER_EAGLE:
+		{
+
+		}
+		break;
+
+		case ORDER_SIDES:
+		{
+
+
+
+		}
+		break;
+	}
+#endif
+
 	if (trk*dpb->HDS+hd < dpb->OFS) return -1;
 	return ((long)sec + hd*dpb->SECS
 		+ trk*dpb->SECS*dpb->HDS
@@ -143,48 +318,287 @@ reserved position
 		/ (dpb->BLS/dpb->BPS);
 }
 
+/* KT - added common free data function */
+void free_image_data(void)
+{
+	if (blk_alloc)
+	{
+		free(blk_alloc);	blk_alloc=NULL;
+	}
+
+	if (track)
+	{
+		free(track);		track=NULL;
+	}
+
+	if (directory)
+	{
+		free(directory);	directory=(DirEntry*)NULL;
+	}
+
+	if (block_buffer)
+	{
+		free(block_buffer);	block_buffer=(uchar*)NULL;
+	}
+
+	*disk_header.tag = 0;
+	dpb = NULL;
+
+	if (imagefile >= 0)
+	{
+		close(imagefile);
+		imagefile = -1;
+	}
+	cur_trk = -1;
+	cur_blk = -1;
+	directory_dirty = 0;
+}
+
 
 
 void abandonimage() {
 /*   ^^^^^^^^^^^^ */
-	*disk_header.tag = 0;
-	cur_trk = -1;
-	if (track)	{free(track); track=NULL;}
-	if (blk_alloc)	{free(blk_alloc); blk_alloc=NULL;}
-	if (directory)	{free(directory); directory=(DirEntry*)NULL;}
-	if (block_buffer){free(block_buffer); block_buffer=(uchar*)NULL;}
+	free_image_data();
+
 	errorf(FALSE,"Image \"%s\" abandoned!",imagename);
 }
-
 
 
 /********
   Tracks
  ********/
 
+/* KT - get offset to track data. */
+unsigned long get_track_offset(int track, int side)
+{
+	switch (image_type)
+	{
+		/* standard disk image */
+		case 0:
+		{
+			/* attempt to access a invalid track and side */
+			if ((track>=disk_header.nbof_tracks) || (side>=disk_header.nbof_heads))
+				return 0;
+
+			return (((track*disk_header.nbof_heads) + side) * disk_header.tracksize) + 0x0100;
+		}
+		/* extended disk image */
+		case 1:
+		{
+			int i;
+			unsigned long offset;
+
+			/* attempt to access a invalid track and side */
+			if ((track>=disk_header.nbof_tracks) || (side>=disk_header.nbof_heads))
+				return 0;
+
+			/* unformatted track? */
+			if (disk_header.unused[((track*disk_header.nbof_heads)+side)]==0)
+				return 0;
+
+			/* for extended disk image, the disk header contains
+			size of each track / 256. Use this table to calculate
+			the offset to the track */
+
+			offset = 0;
+
+			for (i=0; i<(track*disk_header.nbof_heads)+side; i++)
+			{
+				offset += (disk_header.unused[i]<<8);
+			}
+
+			return offset + 0x0100;
+		}
+
+		default:
+			break;
+	}
+
+	return 0;
+}
+
+unsigned long get_track_size(int track, int side)
+{
+	switch (image_type)
+	{
+		/* standard disk image */
+		case 0:
+		{
+			/* attempt to access a invalid track and side */
+			if ((track>=disk_header.nbof_tracks) || (side>=disk_header.nbof_heads))
+				return 0;
+
+			/* return size of track */
+			return disk_header.tracksize;
+		}
+
+		/* extended disk image */
+		case 1:
+		{
+			/* attempt to access a invalid track and side */
+			if ((track>=disk_header.nbof_tracks) || (side>=disk_header.nbof_heads))
+				return 0;
+
+			/* return track size */
+			return ((disk_header.unused[(track*disk_header.nbof_heads)+side])<<8);
+		}
+
+		default:
+			break;
+	}
+
+	return 0;
+}
+
+int	is_track_header_valid(unsigned char *track)
+{
+	struct t_header *track_header = (struct t_header*)track;
+
+	/* header limited to 29 sectors per track */
+	if (track_header->SPT>29)
+		return 0;
+
+	/* unlikely to have a track where the BPS is 16384 bytes! */
+	if (track_header->BPS>6)
+		return 0;
+
+
+	return 1;
+}
+
+int validate_image(void)
+{
+	int t,h;
+	/* header is already validated */
+	for (h=0; h<disk_header.nbof_heads; h++)
+	{
+		for (t=0; t<disk_header.nbof_tracks; t++)
+		{
+			int track_offset = get_track_offset(t,h);
+
+			if (track_offset>=0)
+			{
+				int n;
+
+				int track_size;
+
+				track_size =get_track_size(t,h);
+
+				if (track_size!=0)
+				{
+					/* formatted track */
+					n = lseek(imagefile,track_offset,SEEK_SET);
+					if (n == -1L)
+					{
+						return 0;
+					}
+
+					n = read(imagefile,track,track_size);
+					if (n != track_size)
+					{
+						return 0;
+					}
+
+					/* seeked to position ok, and read data */
+
+					/* check track header */
+					if (!is_track_header_valid(track))
+						return 0;
+				}
+			}
+		}
+	}
+
+	return 1;
+
+}
+
+
+
+/* calculate the maximum size of a track from the disk image. Use this
+to allocate a track buffer */
+void malloc_track()
+{
+	unsigned long max_track_size;
+
+	max_track_size = 0;
+
+	switch (image_type)
+	{
+		case 0:
+		{
+			max_track_size = disk_header.tracksize;
+		}
+		break;
+
+		case 1:
+		{
+
+			int t,h;
+
+			for (h=0; h<disk_header.nbof_heads; h++)
+			{
+				for (t=0; t<disk_header.nbof_tracks; t++)
+				{
+					int track_size;
+
+					track_size = get_track_size(t,h);
+
+					if ((t==0) && (h==0))
+					{
+						max_track_size = track_size;
+					}
+					else
+					{
+						if (track_size>max_track_size)
+						{
+							max_track_size = track_size;
+						}
+					}
+				}
+			}
+		}
+		break;
+
+		default:
+			break;
+	}
+
+	track = Malloc(max_track_size);
+}
+
 int read_track (int hd, int trk) {
-/*  ^^^^^^^^^^
-WARNING: the DPB does not nessecarily exist here! */
+/*  ^^^^^^^^^^ */
 long	n, pos;
+int		track_size;
+
 	if (trk == cur_trk && hd == cur_hd) {
 		return 0;
 	}
 
 	printm(11,"[rt(%d,%d)] ",hd,trk);
 
-	pos = (long)(trk*disk_header.nbof_heads + hd)
-		* (long)disk_header.tracksize;
-	n = lseek(imagefile,0x100L+pos,SEEK_SET);
+	track_size = get_track_size(trk,hd);
+
+	if (track_size == 0)
+		return -1;
+
+	pos = get_track_offset(trk, hd);
+
+	if (pos==0)
+		return -1;
+
+	n = lseek(imagefile,pos,SEEK_SET);
 	if (n == -1L) {
-		errorf(TRUE,"Image currupt! I cannot position on track %d!",
+		errorf(TRUE,"Image corrupt! I cannot position on track %d!",
 									trk);
 		abandonimage();
 		return -1;
 	}
 
-	n = read(imagefile,track,disk_header.tracksize);
-	if (n != disk_header.tracksize) {
-		errorf(TRUE,"Image currupt! I can only read %ld bytes "
+	n = read(imagefile,track,track_size);
+	if (n != track_size) {
+		errorf(TRUE,"Image corrupt! I can only read %ld bytes "
 					"of track %d (instead of %d bytes)!",
 					n,trk,disk_header.tracksize);
 		abandonimage();
@@ -192,7 +606,7 @@ long	n, pos;
 	}
 	cur_trk = trk;
 	cur_hd	= hd;
-
+	track_dirty = 0;
 	return 0;
 }
 
@@ -200,30 +614,141 @@ long	n, pos;
 int write_track() {
 /*  ^^^^^^^^^^^ */
 long	n,pos;
+int track_size;
+
 	if (cur_trk == -1) return 0;
 
+	/* if track is not dirty quit */
+	if (track_dirty==0) return 0;
+
 	printm(11,"[wt(%d,%d)] ",cur_hd,cur_trk);
-	pos = (long)(cur_trk*dpb->HDS + cur_hd)	* (long)disk_header.tracksize;
-	n = lseek(imagefile,0x100L+pos,SEEK_SET);
+
+	track_size = get_track_size(cur_trk, cur_hd);
+
+	if (track_size == 0)
+		return -1;
+
+	pos = (long)get_track_offset(cur_trk, cur_hd);
+
+	if (pos==0)
+		return -1;
+
+	n = lseek(imagefile,pos,SEEK_SET);
 	if (n == -1L) {
-		errorf(TRUE,"Image currupt! I cannot position on track %d!",
+		errorf(TRUE,"Image corrupt! I cannot position on track %d!",
 								cur_trk);
 		abandonimage();
 		return -1;
 	}
 
-	n = write(imagefile,track,disk_header.tracksize);
-	if (n != disk_header.tracksize) {
+	n = write(imagefile,track,track_size);
+	if (n != track_size) {
 		errorf(TRUE,"Something wrong! I cannot write %d bytes "
 					"to track %d (only %d bytes written)!",
 					disk_header.tracksize,cur_trk,n);
 		abandonimage();
 		return -1;
 	}
+
+	track_dirty = 0;
+
 	return 0;
 }
 
+/* KT - added support for different block orders */
+bool next_sector (int *hd, int *trk, int *sec) {
+/*   ^^^^^^^^^^^
+Assumes <sec> without offset. Answer TRUE if the <trk> or <hd> is changed. */
 
+	int prev_hd;
+	int prev_trk;
+
+	prev_hd = *hd;
+	prev_trk = *trk;
+
+	switch (dpb->order)
+	{
+		case ORDER_CYLINDERS:
+		{
+			(*sec)++;
+
+			if ((*sec) >= dpb->SECS)
+			{
+				(*sec) -= dpb->SECS;
+
+				if ((*hd) & 1)
+				{
+					(*trk)--;
+
+					if ((*trk)<0)
+					{
+	                 // not handled
+					}
+				}
+				else
+				{
+					(*trk)++;
+
+					if ((*trk)>=dpb->TRKS)
+					{
+						(*trk) = dpb->TRKS-1;
+						(*hd)++;
+					}
+				}
+			}
+		}
+		break;
+
+		case ORDER_SIDES:
+		{
+			(*sec)++;
+			if (*sec >= dpb->SECS)
+			{
+				*sec -= dpb->SECS;
+				(*hd)++;
+				if (*hd >= dpb->HDS)
+				{
+					*hd = 0;
+					(*trk)++;
+				}
+			}
+		}
+		break;
+
+		case  ORDER_EAGLE:
+		{
+			(*sec)++;
+
+			if ((*sec) >= dpb->SECS)
+			{
+				(*sec) -= dpb->SECS;
+
+				(*trk)++;
+
+				if ((*trk)>dpb->TRKS)
+				{
+					*trk = 0;
+					(*hd)++;
+				}
+			}
+		}
+		break;
+
+
+	}
+
+	/* if head, track or head and track have changed, then force a write of track */
+	if ((prev_hd!=(*hd)) || (prev_trk!=(*trk)))
+	{
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+
+#if 0
 bool next_sector (int *hd, int *trk, int *sec) {
 /*   ^^^^^^^^^^^
 Assumes <sec> without offset. Answer TRUE if the <trk> or <hd> is changed. */
@@ -239,43 +764,167 @@ Assumes <sec> without offset. Answer TRUE if the <trk> or <hd> is changed. */
 	}
 	return FALSE;
 }
+#endif
 
+/* given a sector id, search through sector id's in track header
+to find the position of the sector in the track. This allows
+for interleaved sectors */
+int	get_sector_pos_in_track(int r,int h)
+{
+	struct t_header *track_header = (struct t_header*)track;
+	struct s_info	*sector_info = &track_header->sector[0];
+	int i;
+	int spt;
 
-int interleave(uchar *track,int sec) {
-/* Searches the sector numbers of <track> for the sectorid <sec> and answers
-its potition */
-int	i;
-	for (i=0;i<dpb->SECS;i++) {
-		if (((struct t_header*)track)->sector[i].sector
-							== sec+dpb->SEC1) {
-			return i;
+	/* defines number of sector id's stored */
+	spt = track_header->SPT;
+
+	for (i=0; i<spt; i++)
+	{
+		/* match sector id */
+		if (sector_info->sector==r)
+		{
+			/* match head value */
+			if (sector_info->head == h)
+			{
+				return i;
+			}
 		}
+
+		sector_info++;
 	}
-	errorf(FALSE,"Image uses invalid interleave! Sector 0x%X in Track %d "
-					"and Head %d",sec,cur_trk,cur_hd);
-	abandonimage();
-	return 0;
+
+	/* sector not found */
+	return -1;
 }
 
+int get_sector_data_offset_extended(int pos)
+{
+	struct t_header *track_header = (struct t_header*)track;
+	struct s_info	*sector_info = &track_header->sector[0];
+	int i;
+	int sector_offset;
+
+	sector_offset = 0;
+
+	for (i=0; i<pos; i++)
+	{
+		int sector_size;
+
+		sector_size = sector_info->unused[0] +
+					(sector_info->unused[1]<<8);
+
+		sector_info++;
+		sector_offset += sector_size;
+	}
+
+	return sector_offset;
+}
+
+/* N value used in formatting and reading/writing data. This defines
+the amount of data stored in the sector */
+int	get_sector_size_from_n(int n)
+{
+	return (1<<n)<<7;
+}
+
+uchar	*get_sector_data_ptr(int r,int h)
+{
+	struct t_header *track_header = (struct t_header*)track;
+
+	/* using sector id find sector pos in track */
+	int pos = get_sector_pos_in_track(r,h);
+    int sector_offset = 0;
+
+	if (pos==-1)
+		return NULL;
+
+    switch (image_type)
+    {
+        case 0:
+        {
+            /* for standard disk images, N in the track header should
+            define the largest sector size */
+            int sector_size = get_sector_size_from_n(track_header->BPS);
+
+            sector_offset = 0x0100 + pos*sector_size;
+        }
+        break;
+
+        case 1:
+        {
+            sector_offset = 0x0100 + get_sector_data_offset_extended(pos);
+        }
+        break;
+
+        default:
+            return NULL;
+    }
+
+	return track+sector_offset;
+}
 
 uchar *read_block (int blk) {
 /*    ^^^^^^^^^^
 Read block <blk> into a buffer and return its address, or NULL on error */
 int	trk, sec, hd;
 int	filled = 0;
+uchar *sector_ptr;
+
 
 	if (blk==cur_blk) return block_buffer;
 
+	if ((blk<0) || (blk>=(dpb->DSM+1)))
+		return NULL;
+
 	printm(11,"[rb(%d)] ",blk);
 
-	trk = trk_calc (blk);
+/*	trk = trk_calc (blk);
 	sec = sec_calc (blk);
-	hd  = hd_calc (blk);
+	hd  = hd_calc (blk);*/
 
-	while (filled < dpb->BLS) {
-		if (read_track(hd,trk)) return NULL;
-		memcpy(block_buffer+filled,
-			track+0x100+interleave(track,sec)*dpb->BPS,dpb->BPS);
+	calc_t_s_h(blk, &trk, &sec, &hd);
+
+	while (filled < dpb->BLS)
+	{
+		int r,h;
+
+		if (read_track(hd,trk))
+		{
+		 errorf(FALSE, "Warning: cannot find track, unable to read data!");
+
+        	return NULL;
+        }
+
+		r = sec;
+
+		if (hd==0)
+		{
+			h = dpb->side0_hd;
+			r = dpb->SEC_side1[r];
+			//r += dpb->SEC1_side1;
+		}
+		else
+		{
+			h = dpb->side1_hd;
+			r = dpb->SEC_side2[r];
+			//r += dpb->SEC1_side2;
+		}
+
+		sector_ptr = get_sector_data_ptr(r,h);
+
+		if (sector_ptr==NULL)
+		{
+			errorf(FALSE, "Warning: cannot find sector (%d,%d,%d), unable to read data!",trk,hd,r);
+          memset(block_buffer+filled, 0, dpb->BPS);
+        //	return NULL;
+		}
+		else
+		{
+
+	    	memcpy(block_buffer+filled, sector_ptr, dpb->BPS);
+         }
+
 		filled += dpb->BPS;
 		next_sector (&hd,&trk,&sec);
 	}
@@ -284,30 +933,83 @@ int	filled = 0;
 }
 
 
-uchar *write_block (int blk, char *buf) {
+uchar *write_block (int blk, uchar *buf) {
 /*    ^^^^^^^^^^^
 Return the written buffer or NULL on error */
 int	trk, sec, hd;
 int	filled = 0;
+uchar *sector_ptr;
 
 	printm(11,"[wb(%d)] ",blk);
 
-	trk = trk_calc (blk);
+	if ((blk<0) || (blk>=(dpb->DSM+1)))
+		return NULL;
+
+/*	trk = trk_calc (blk);
 	sec = sec_calc (blk);
 	hd  = hd_calc (blk);
+*/
 
-	while (filled < dpb->BLS) {
-		if (read_track(hd,trk)) return NULL;
-		memcpy(track+0x100+interleave(track,sec)*dpb->BPS,
-							buf+filled,dpb->BPS);
+	calc_t_s_h(blk, &trk, &sec, &hd);
+
+	while (filled < dpb->BLS)
+	{
+		int r,h;
+
+		if (read_track(hd,trk))
+        {
+         		 errorf(FALSE, "Warning: cannot find track, unable to write data!");
+
+        	return NULL;
+         }
+
+		r = sec;
+
+		if (hd==0)
+		{
+			h = dpb->side0_hd;
+			r = dpb->SEC_side1[r];
+			//r+=dpb->SEC1_side1;
+		}
+		else
+		{
+			h = dpb->side1_hd;
+			r = dpb->SEC_side2[r];
+			//r+=dpb->SEC1_side2;
+		}
+
+		sector_ptr = get_sector_data_ptr(r,h);
+
+		if (sector_ptr==NULL)
+		{
+			errorf(FALSE, "Warning: cannot find sector, unable to write data!");
+
+			return NULL;
+		}
+
+		memcpy(sector_ptr, buf+filled, dpb->BPS);
+		track_dirty = 1;
+
 		filled += dpb->BPS;
 		if (next_sector (&hd,&trk,&sec)) write_track();
 	}
 	write_track();
-	return (uchar*)buf;
+	return buf;
 }
 
+/* fill a block with 0x0e5 - nukes data in it */
+void	nuke_block(int blk)
+{
+	if ((blk<0) || (blk>=(dpb->DSM+1)))
+		return;
 
+	if (block_buffer == NULL)
+		return;
+
+	memset(block_buffer, 0x0e5, dpb->BLS);
+
+	write_block(blk, block_buffer);
+}
 
 /***********
   Directory
@@ -330,12 +1032,15 @@ Answer the next entry (or -1) with the same pattern as before */
 int	i;
 uchar	name[20];
 
+	if (dpb==NULL)
+		return -1;
+
 	for (i=last_entry[glob_env]+1;i<=dpb->DRM;i++) {
 		if (!directory[i].first) continue;
-		build_cpm_name_32((char*)name, directory[i].user,
-				  (char*)directory[i].root,
-				  (char*)directory[i].ext);
-		if (match((char*)pattern[glob_env],(char*)name)) {
+		build_cpm_name_32((signed char*)name, directory[i].user,
+				  (signed char*)directory[i].root,
+				  (signed char*)directory[i].ext);
+		if (match((signed char*)pattern[glob_env],(signed char*)name)) {
 			last_entry[glob_env] = i;
 			return i;
 		}
@@ -355,23 +1060,24 @@ The work is mostly deferred to <glob_cpm_next>. */
 int	user;
 uchar	root[INPUTLEN], ext[INPUTLEN];
 const char errmsg[] = "Illegal filename \"%s\"";
-
-	if (parse_cpm_filename(pat,&user,(char*)root,(char*)ext))
+root[0] = '\0';
+ext[0] = '\0';
+	if (parse_cpm_filename(pat,&user,root,ext))
 		return errorf(FALSE,errmsg,pat);
-	upper((char*)root);
-	upper((char*)ext);
+	upper(root);
+	upper(ext);
 	if (*root==0) {
 		if (user >= 0) {
-			strcpy((char*)root,"*");
-			strcpy((char*)ext,"*");
+			strcpy(root,"*");
+			strcpy(ext,"*");
 		} else {
 		return errorf(FALSE,errmsg,pat);
 
 		}
 	}
 	if (user==-1) user = cur_user;
-	build_cpm_name((char*)pattern[glob_env], user,
-		(char*)root, (char*)ext);
+	build_cpm_name((signed char*)pattern[glob_env], user,
+		(signed char*)root, (signed char*)ext);
 	last_entry[glob_env] = -1;	/* thus start with 0 */
 	return glob_cpm_next();
 }
@@ -387,7 +1093,7 @@ int cmp_pair(struct pair *x, struct pair *y) {
 	return 0;
 }
 
-void update_directory() {
+void update_directory(int set_dirty) {
 /*   ^^^^^^^^^^^^^^^^
 (Re-)Organizes the directory structure (Packing the name, making a linked
 list) */
@@ -397,16 +1103,25 @@ int	i, j;
 /* a dynamic array of (entry,extent) pairs */
 struct pair	*map;
 
+	if (set_dirty)
+	{
+		directory_dirty = 1;
+	}
+
 
 	printm(10,"[ud] ");
-	map = (struct pair*)Malloc(sizeof(struct pair)*(dpb->DRM+1));
+	map = (struct pair*)Malloc(sizeof(DirEntry)*(dpb->DRM+1));
+
+	/* KT - added memory fail check */
+	if (map==NULL)
+		return;
 
 /****** packing a name of kind "FOO	BAR" to "FOO.BAR\0" ******/
 	for (i=0;i<=dpb->DRM;i++) {
 		if (directory[i].user == 0xE5) continue;
-		build_cpm_name_32((char*)directory[i].name, -1,
-				  (char*)directory[i].root,
-				  (char*)directory[i].ext);
+		build_cpm_name_32((signed char*)directory[i].name, -1,
+				  (signed char*)directory[i].root,
+				  (signed char*)directory[i].ext);
 	}
 
 
@@ -428,7 +1143,7 @@ struct pair	*map;
 		if (directory[i].size > -1) continue;
 
 /* reset the map */
-		for (j=0;j<=dpb->DRM;j++) {map[j].en=j;map[j].ex=0xFF;}
+		for (j=0;j<=dpb->DRM;j++) {map[j].en=(uchar)j;map[j].ex=(uchar)0xFF;}
 
 /* fill the map with <extent> from the directory */
 		map[i].ex = directory[i].extent;
@@ -436,8 +1151,8 @@ struct pair	*map;
 			if ((directory[j].size == -1) &&
 			    (directory[j].user == directory[i].user) &&
 			    (i!=j) &&
-			    (strcmp((char*)directory[i].name,
-				    (char*)directory[j].name)==0)) {
+			    (strcmp((signed char*)directory[i].name,
+				    (signed char*)directory[j].name)==0)) {
 					map[j].ex = directory[j].extent;
 					directory[j].size = 0;
 			}
@@ -458,9 +1173,10 @@ struct pair	*map;
 /* the filesize located in the first fileentry can be calculated from the
 <extent> and <rec> fields of the last fileentry */
 
+		/* KT: changed calculation to use extent number, and block size */
 		directory[map[0].en].size =
-			(long)directory[map[j-1].en].extent * EXTENTSIZE
-			+ directory[map[j-1].en].rec * RECORDSIZE;
+			((long)directory[map[j-1].en].extent * EXTENTSIZE)
+			+ (directory[map[j-1].en].rec * RECORDSIZE);
 
 
 	} /* for i */
@@ -476,14 +1192,24 @@ uchar	*buf;
 int	mask;
 
 	printm(10,"[rd] ");
+
+	for (i=0; i<=dpb->DRM; i++)
+	{
+		directory[i].user = 0x0e5;
+	}
+
 /* reading the directory data */
 	for (i=0;i<=dpb->DRM;i++) {
 		buf = read_block((signed)i*32/dpb->BLS);
+
+		if (buf==0)
+			break;
+
 		off = i*32 % dpb->BLS;
 /* user, name, ... */
 		directory[i].user	= buf[off+0];
-		for (j=0;j<8;j++) directory[i].root[j] = buf[off+j+1] & 0x7F;
-		for (j=0;j<3;j++) directory[i].ext[j]  = buf[off+j+9] & 0x7F;
+		for (j=0;j<8;j++) directory[i].root[j] = (buf[off+j+1] & 0x7F);
+		for (j=0;j<3;j++) directory[i].ext[j]  = (buf[off+j+9] & 0x7F);
 		directory[i].name[0]	= 0;
 
 		directory[i].extent	= buf[off+12];
@@ -507,21 +1233,56 @@ int	mask;
 			}
 		} else if (BLKNR_SIZE==2) {
 			for (j=0;j<8;j++) {
-				directory[i].blk[j] = buf[off+16+2*j]
-							+ 256 * buf[off+17+2*j];
+				directory[i].blk[j] = (buf[off+16+2*j]
+							+ (buf[off+17+2*j]<<8));
 			}
 		}
 	}
 
-	update_directory();
-	for (i=0;i<dpb->DBL;i++) alloc_block(i,0); /* 0 is not correct! */
+	update_directory(0);
+	/*for (i=0;i<dpb->DBL;i++) alloc_block(i,0);*/ /* 0 is not correct! */
 
-/* marking the blocks as allocated */
+	/* marking all blocks as free */
 	for (j=0;j<=dpb->DSM;j++) free_block(j);
-	for (i=0;i<=dpb->DRM;i++) {
-		for (j=0;j<BLKNR;j++) {
-			if ((directory[i].user!=0xE5)&&(directory[i].blk[j]))
-				alloc_block(directory[i].blk[j],i);
+
+	{
+		/* mark allocated blocks from AL1, AL0 as used */
+		/* AL0 and AL1 make a bitmask. AL0 is bits 15..8, AL1 is
+		bits 7..0. If a bit is set, a block is allocated. Block indexs
+		go from 0-15, bits 15..0 */
+		unsigned long bit_mask;
+
+		bit_mask = (dpb->AL0<<8) | dpb->AL1;
+
+		for (i=0; i<16; i++)
+		{
+			/* is bit set? */
+			if (bit_mask & 0x08000)
+			{
+				/* yes, alloc block */
+				alloc_block(i);
+			}
+			/* shift for next bit */
+			bit_mask = bit_mask<<1;
+
+		}
+	}
+
+	/* mark blocks used by files as allocated */
+	for (i=0;i<=dpb->DRM;i++)
+	{
+		for (j=0;j<BLKNR;j++)
+		{
+			if (directory[i].user!=0xE5)
+			{
+				/* KT - changed. will quit out at the first zero block index found */
+				if (directory[i].blk[j])
+				{
+					alloc_block(directory[i].blk[j]);
+				}
+				else
+					break;
+			}
 		}
 	}
 }
@@ -536,6 +1297,15 @@ int	block;
 
 	printm(10,"[wd] ");
 	buf = block_buffer;	/* simply a shortcut */
+
+	/* KT - added to prevent crash if directory is not allocated! */
+    if (directory==NULL)
+		return;
+
+	if (directory_dirty==0)
+		return;
+
+	directory_dirty = 0;
 
 	block = 0;
 	for (i=0;i<=dpb->DRM;i++) {
@@ -559,18 +1329,18 @@ int	block;
 
 		if (BLKNR_SIZE==1) {
 			for (j=0;j<16;j++) {
-				buf[off+16+j] = directory[i].blk[j];
+				buf[off+16+j] = (uchar)directory[i].blk[j];
 			}
 		} else if (BLKNR_SIZE==2) {
 			for (j=0;j<8;j++) {
-				buf[off+16+2*j] = directory[i].blk[j] % 256;
-				buf[off+17+2*j] = directory[i].blk[j] / 256;
+				buf[off+16+2*j] = (uchar)(directory[i].blk[j] & 255);
+				buf[off+17+2*j] = (uchar)(directory[i].blk[j]>>8);
 			}
 		}
 
 /* if next entry is in the next block, then write the current block */
 		if ((i+1)*32/(signed)dpb->BLS > block) {
-			write_block(block,(char*)buf);
+			write_block(block,buf);
 			block++;
 		}
 	}
@@ -582,40 +1352,112 @@ int	block;
   Image
  *******/
 
+int	get_bit_count_from_mask(unsigned long mask)
+{
+	int bit_count;
+
+	bit_count = 0;
+
+	while ((mask & 1)!=0)
+	{
+		bit_count++;
+		mask = mask>>1;
+	}
+
+	return bit_count;
+}
+
+
+/* at this point we should have a format which matches the disk image format */
+/* TRKS in DPB is not good. In 22disk this defines the physical disk structure. */
 void update_dpb(DPB_type *dpb, uchar *track) {
 /*   ^^^^^^^^^^
 Determine the extended DPB data out of <dpb> and the sample track <track>.
 Complete the extension parts of <dpb>. <track> must be read in first!
 */
+	int BLKNR_MAX;
+	int sectors_per_dir;
+
 	dpb->BLS  = 1 << (dpb->BSH + 7); /* or 2^BSH*128 */
 
+	/* KT - already present in format description */
+#if 0
 /* an image must exist, do not call form <format>! */
-	/* dpb->SEC1 = keep from DPB template */
+	dpb->SEC1 = ((struct t_header*)track)->sector[0].sector;
 	dpb->SECS = ((struct t_header*)track)->SPT;
-/* the next two elements should already be set */
+
+	/* KT - Removed because they are already specified */
+	/* the next two elements should already be set */
 	dpb->TRKS = disk_header.nbof_tracks;
 	dpb->HDS  = disk_header.nbof_heads;
+#endif
 
 	dpb->SYS  = (dpb->OFS>0) && (*(track+0x100)) != filler;
 	dpb->DBL  = 32 * (dpb->DRM+1) / dpb->BLS; /* or often CKS/8 */
 
-	dpb->DSM = (dpb->TRKS*dpb->HDS*dpb->SECS) / (dpb->BLS/dpb->BPS) - 1;
+	/* KT - Removed because this is already specified */
+#if 0
+	/* DSM will be specified, so no need to calculate */
+
+	dpb->DSM = (dpb->TRKS*dpb->HDS*dpb->SECS) / (dpb->BLS/dpb->BPS);
 /* subtract reserved tracks */
 	dpb->DSM -= dpb->OFS * dpb->SECS / (dpb->BLS/dpb->BPS);
-/* subtract one for a slack block, because neither 18/8 nor 9/2 is integral: */
 	dpb->DSM--;
+#endif
 
-	if (dpb->DSM>=255) {
-/* 2 byte pointer and 8 pointer per entry */
+	/* KT - Added because it is no longer stored! */
+	dpb->SPT = (dpb->SECS*dpb->BPS)/RECORDSIZE;
+
+	sectors_per_dir = (((dpb->DRM+1)<<5)+(dpb->BPS-1))/dpb->BPS;
+	sectors_per_dir = sectors_per_dir * dpb->BPS;
+
+	dpb->CKS = sectors_per_dir/RECORDSIZE;
+
+
+ 	if (dpb->DSM>=256) {
+/* 2 byte pointer and 8 pointer per entry max */
 		BLKNR_SIZE = 2;
-		BLKNR = 8;
-	} else {
-/* 1 byte pointer and 16 pointer per entry */
+		BLKNR_MAX = 8;
+	}
+	else
+	{
+/* 1 byte pointer and 16 pointer per entry max */
 		BLKNR_SIZE = 1;
-		BLKNR = 16;
+		BLKNR_MAX = 16;
+	}
+
+	/* if the extent mask is a real mask, then we can calculate the number of 1 bits in it.
+	From this we can calculate the number of extents */
+	/* the function will only work if EXM is 1,3,7,15.... i.e. if bit 3 is set, bits 2,1 and 0 must be set */
+	/* it will not handle isolated bits! e.g. EXM=8*/
+	/* get number of extents from exm bit mask */
+	dpb->num_extents = 1<<get_bit_count_from_mask(dpb->EXM);
+
+
+	/* I hope this should correctly get the number of blocks per directory entry */
+	/* a directory entry can only describe a maximum of 16384 bytes */
+	{
+		unsigned long max_size;
+
+		/* calculate the max size based on the max number of blocks that
+		can be stored in the directory entry. The max number of blocks
+		is dependant on DSM. If DMS<=255, then 16 blocks can be stored,
+		else 8 blocks can be stored */
+		max_size = BLKNR_MAX * dpb->BLS;
+
+		/* divide max size by EXM+1. If this is greater than 16384,
+		calculate the number of blocks we can store */
+		if ((max_size/dpb->num_extents)>EXTENTSIZE)
+		{
+			BLKNR = (EXTENTSIZE*dpb->num_extents)/dpb->BLS;
+		}
+		else
+		{
+			/* set to max allowed */
+			BLKNR = BLKNR_MAX;
+		}
 	}
 }
-
 
 void close_image() {
 /*   ^^^^^^^^^^^ */
@@ -623,28 +1465,179 @@ void close_image() {
 		printm(10,"[ci] ");
 		if (cur_trk > -1) write_track();
 		put_directory();
-		free(blk_alloc);	blk_alloc=NULL;
-		free(track);		track=NULL;
-		free(directory);	directory=(DirEntry*)NULL;
-		free(block_buffer);	block_buffer=(uchar*)NULL;
-		*disk_header.tag = 0;
-		dpb = NULL;
-		close(imagefile);
 	}
-	cur_trk = -1;
-	cur_blk = -1;
+	free_image_data();
+}
+
+int sector_exists(uchar *track, ushort SEC1)
+{
+ 	struct t_header *track_header = (struct t_header *)track;
+ 	int i;
+	struct s_info *sector_info = &track_header->sector[0];
+	int spt;
+
+	spt = track_header->SPT;
+
+	/* check if SEC1 exists in sectors available on track 0 */
+	for (i=0; i<spt; i++)
+	{
+		if (sector_info->sector == SEC1)
+		{
+			return 1;
+		}
+
+		sector_info++;
+	}
+
+	return 0;
+}
+
+/* KT - added select format from those available */
+int	select_format(uchar *track)
+{
+	struct t_header *track_header = (struct t_header *)track;
+	int spt;
+	DPB_list_entry *cur_entry;
+	DPB_list_entry *dpb_entry_found = NULL;
+	int found_count = 0;
+	spt = track_header->SPT;
+
+	/* go through list of supported formats */
+	cur_entry = dpb_list.first;
+
+	while (cur_entry!=NULL)
+	{
+		/* check if first sector exists in list of sectors in track */
+		if (sector_exists(track, cur_entry->dpb.SEC_side1[0]))
+		{
+			/* sector exists */
+
+			/* correct sectors per track? */
+			if (spt == cur_entry->dpb.SECS)
+			{
+				/* correct number of sides? */
+				if (disk_header.nbof_heads==cur_entry->dpb.HDS)
+				{
+					if (disk_header.nbof_tracks == cur_entry->dpb.TRKS)
+					{
+						// found a format that appears to match the format on the disc
+						if (dpb_entry_found==NULL)
+						{
+							dpb_entry_found = cur_entry;
+						}
+
+						errorf(FALSE, "Found format \"%s\" matching disk image format", cur_entry->ident);
+
+						found_count++;
+					}
+				}
+
+			}
+
+		}
+
+		cur_entry = cur_entry->next;
+	}
+
+	/* no entry found */
+	if (dpb_entry_found==NULL)
+	{
+		/* format not recognised */
+
+		/* no format found */
+		return -1;
+	}
+
+	if (found_count==1)
+	{
+		dpb = &dpb_entry_found->dpb;
+		dpb_list_entry = dpb_entry_found;
+
+		/* found it - update it */
+		update_dpb(dpb,track);
+
+		return 0;
+	}
+
+	/* too many formats to choose from */
+	return -2;
+}
+
+DPB_list_entry *get_dpb_entry_from_format_name(const char *format_name)
+{
+	DPB_list_entry *cur_entry;
+
+	/* go through list of supported formats */
+	cur_entry = dpb_list.first;
+
+	while (cur_entry!=NULL)
+	{
+		if (strcmp(cur_entry->ident, format_name)==0)
+		{
+			return cur_entry;
+		}
+
+		cur_entry = cur_entry->next;
+	}
+
+	return 0;
 }
 
 
-int open_image(char *name) {
+/* KT - added select format from those available */
+#ifndef _LIBRARY_
+void print_formats_available()
+{
+	DPB_list_entry *cur_entry;
+
+	newpage("c");
+
+	/* go through list of supported formats */
+	cur_entry = dpb_list.first;
+
+	while (cur_entry!=NULL)
+	{
+		if (cur_entry->description!=NULL)
+		{
+			printm(2, "%s (%s)",cur_entry->ident,cur_entry->description);
+			putcharm(0,10);
+			nextline();
+		}
+
+		cur_entry = cur_entry->next;
+	}
+}
+#endif
+
+const char *disc_format_not_recognised_string = "Disc format not recognised!";
+
+void initialise(void)
+{
+	/* KT - initialise some data */
+
+	cur_trk = -1;
+	cur_hd = -1;
+	cur_blk = -1;
+	directory_dirty = 0;
+	image_type = 0;
+	*disk_header.tag = 0;
+	track = NULL;
+	blk_alloc = NULL;
+	directory = NULL;
+	block_buffer = NULL;
+	imagefile = -1;
+}
+
+int open_image(char *name, int auto_detect) {
 /*  ^^^^^^^^^^
 alloc track buffer, blk_alloc, buffer, read directory */
 
 int	n;
 char	dirsep[2] = {DIRSEPARATOR, 0};
-char	*p;
-
-	if (*disk_header.tag) close_image();
+int result;
+#ifdef LINUX
+char *p;
+#endif
 /* open file */
 	printm(10,"[oi] ");
 	imagefile = open(name,O_RDWR|O_BINARY,0);
@@ -670,19 +1663,82 @@ char	*p;
 		return -1;
 	}
 
-/* allocate memory */
-	track = Malloc(disk_header.tracksize);
+	/* added function to malloc block which is size of the biggest track */
+	malloc_track();
+
+	/* check malloc succeded */
+	if (track==NULL)
+	{
+		abandonimage();
+		return -1;
+	}
+
+
+
+	if (!validate_image())
+	{
+		errorf(FALSE, "Image file is corrupted!");
+		abandonimage();
+		return -1;
+	}
+
+
 
 /* set up varaibles */
 	filler = 0xE5;
 	cur_user=0;
 
-	p = getwd(full_imagename);
-	if (p) strcpy(full_imagename,p);
+#if defined(WIN32) || defined(WIN64)
+	/* potential to exceed full_imagename buffer size */
+	_getcwd(full_imagename, FULL_IMAGENAME_LENGTH);
+
+	/* if image name was got and it exceeded buffer, then it
+	will be truncated, but there will be no ending NULL. Force it
+	just in case */
+	full_imagename[FULL_IMAGENAME_LENGTH-1] = '\0';
+#else
+	/* potential to exceed full_imagename buffer size */
+	p = getcwd(full_imagename, sizeof(full_imagename));
+	full_imagename[FULL_IMAGENAME_LENGTH-1] = '\0';
+#endif
+
+#if  !defined(WIN32) && !defined(WIN64)
+	/* not required by WIN32 version, since _getcwd returns a pointer
+	to the buffer passed if it succeeded. In this case returning
+	full_buffer */
+	if (p)
+	{
+		/* copy as much of the string as would fit in the buffer */
+		strncpy(full_imagename,p,FULL_IMAGENAME_LENGTH);
+		/* force NULL just in case there isn't one */
+		full_imagename[FULL_IMAGENAME_LENGTH-1] = '\0';
+	}
+#endif
+
 	if (full_imagename[strlen(full_imagename)-1]==DIRSEPARATOR)
 		full_imagename[strlen(full_imagename)-1]=0;
-	strcat(full_imagename,dirsep);
-	strcat(full_imagename,name);
+
+	/* KT - added this to stop strcat overflowing buffer */
+	{
+		int BytesRemaining;
+
+		BytesRemaining = FULL_IMAGENAME_LENGTH - strlen(full_imagename) - 1;
+
+		if (BytesRemaining!=0)
+		{
+			strncat(full_imagename,dirsep, BytesRemaining);
+			full_imagename[FULL_IMAGENAME_LENGTH-1] = '\0';
+		}
+
+		BytesRemaining = FULL_IMAGENAME_LENGTH - strlen(full_imagename) - 1;
+
+		if (BytesRemaining!=0)
+		{
+			strncat(full_imagename,name, BytesRemaining);
+			full_imagename[FULL_IMAGENAME_LENGTH-1] = '\0';
+		}
+	}
+
 #if DOS
 	lower(full_imagename);
 #endif
@@ -690,46 +1746,79 @@ char	*p;
 		imagename++;
 	else	imagename=full_imagename;
 
-/* determine system/data-disk */
-	read_track(0,0);
-	cur_format = ((struct t_header*)track)->sector[0].sector;
-
-	if (cur_format>=SYSTEMFORMAT && cur_format<SYSTEMFORMAT+FORMATDIFF)
-		cur_format=SYSTEMFORMAT;
-	if (cur_format>=IBMFORMAT && cur_format<IBMFORMAT+FORMATDIFF)
-		cur_format=IBMFORMAT;
-	if (cur_format>=DATAFORMAT && cur_format<DATAFORMAT+FORMATDIFF)
-		cur_format=DATAFORMAT;
-
-	switch (cur_format) {
-	case SYSTEMFORMAT:
-		dpb=&DPB_store[SYSTEM_DPB]; update_dpb(dpb,track); break;
-	case IBMFORMAT: /* or Vortex format */
-		if (disk_header.nbof_heads==1) { /*sensible condition???*/
-			dpb=&DPB_store[IBM_DPB];
-			update_dpb(dpb,track);
-		} else {
-			dpb=&DPB_store[VORTEX_DPB];
-			update_dpb(dpb,track);
-			cur_format = VORTEXFORMAT;
-		}
-		break;
-	case DATAFORMAT:
-		dpb=&DPB_store[DATA_DPB]; update_dpb(dpb,track); break;
-	default:
-		errorf(FALSE,"Disk format not recognised!");
+	/* determine disk format */
+	if (read_track(0,0))
+	{
 		abandonimage();
 		return -1;
-		break;
 	}
 
 
+
+	/* auto-detect image format */
+	if (auto_detect)
+	{
+
+		result = select_format(track);
+
+		if (result==-2)
+		{
+			errorf(FALSE, "Multiple formats found!");
+			abandonimage();
+			return -1;
+		}
+
+		if (result==-1)
+		{
+			errorf(FALSE, disc_format_not_recognised_string);
+			abandonimage();
+			return -1;
+		}
+	}
+	else
+	{
+		/* found it - update it */
+		update_dpb(dpb,track);
+	}
+
+	if (dpb==NULL)
+	{
+		errorf(FALSE, disc_format_not_recognised_string);
+		abandonimage();
+		return -1;
+	}
+
+
+
 /* calculate number of blocks and allocate memory */
-	blk_alloc = Malloc(dpb->DSM+1);
+	blk_alloc = (uchar *)Malloc(((dpb->DSM+1)+7)>>3);
+
+	/* KT - added memory allocate check */
+	if (blk_alloc==NULL)
+	{
+		abandonimage();
+
+		return -1;
+	}
+
 	directory = (DirEntry*)Malloc(sizeof(DirEntry)*(dpb->DRM+1));
+
+	/* KT - added memory allocate check */
+	if (directory==NULL)
+	{
+		abandonimage();
+		return -1;
+	}
 
 /* allocate block buffer */
 	block_buffer = (uchar*)Malloc(dpb->BLS);
+
+	if (block_buffer==NULL)
+	{
+		abandonimage();
+		return -1;
+	}
+
 
 /* get directory information */
 	get_directory();
@@ -747,7 +1836,7 @@ Place <text> in the comment field of the image and save the image
 int     i;
 	memset(disk_header.tag+8,0,40);
 	i=0;
-	while (text[i] && i<40) {
+	while (i<40 && text[i]) {
 		*(disk_header.tag+8+i) = text[i];
 		i++;
 	}
@@ -813,11 +1902,17 @@ uchar	*buf;
 		return;
 	}
 	buf = read_block((signed)directory[ent].blk[0]);
+
+	if (buf==0)
+	{
+		amsdos_header.flag = 1;
+		return;
+	}
 	amsdos_header.type	= buf[18];
-	amsdos_header.load	= buf[21] + 256*buf[22];
-	amsdos_header.jump	= buf[26] + 256*buf[27];
-	amsdos_header.size	= buf[64] + 256*buf[65];
-	amsdos_header.checksum	= buf[67] + 256*buf[68];
+	amsdos_header.load	= buf[21] + (buf[22]<<8);
+	amsdos_header.jump	= buf[26] + (buf[27]<<8);
+	amsdos_header.size	= buf[64] + (buf[65]<<8);
+	amsdos_header.checksum	= buf[67] + (buf[68]<<8);
 
 	for (i=0;i<=66;i++) {
 		sum += buf[i];
@@ -840,15 +1935,14 @@ int	res;
 	if (directory[*x].user < directory[*y].user)		res = -1;
 	else if (directory[*x].user > directory[*y].user)	res = 1;
 	else {
-		res = strncmp((char*)directory[*x].root,
-			      (char*)directory[*y].root, 8);
+		res = strncmp((signed char*)directory[*x].root,
+			      (signed char*)directory[*y].root, 8);
 		if (res==0)
-			res = strncmp((char*)directory[*x].ext,
-				      (char*)directory[*y].ext, 3);
+			res = strncmp((signed char*)directory[*x].ext,
+				      (signed char*)directory[*y].ext, 3);
 	}
 	return res;
 }
-
 
 #ifndef _LIBRARY_
 int dir(char *pat, int mask) {
@@ -875,8 +1969,16 @@ uchar	*buf;
 int	user;
 char	root[INPUTLEN];
 char	ext[INPUTLEN];
-
+upbuffer[0] = '\0';
+root[0] = '\0';
+ext[0] = '\0';
 	array = (int*)Malloc(sizeof(int)*max(256,dpb->DRM+1));
+
+	/* KT - added check for memory allocation fail */
+	if (array==NULL)
+	{
+		return 0;
+	}
 
 	parse_cpm_filename(pat,&user,root,ext);
 	if (user==-1) user = cur_user;
@@ -895,19 +1997,25 @@ char	ext[INPUTLEN];
 	newpage("c");
 
 /*** header ***/
-	strcpy(upbuffer,imagename);
+
+	/* KT - changed strcpy because it could overflow buffer */
+	strncpy(upbuffer, imagename, INPUTLEN);
+	upbuffer[INPUTLEN-1]='\0';
+
 	upper(upbuffer);
-	printm(0,"Directory of Image: %s, User ", upbuffer);
+	printm(0,"Directory of Image: %s , User ", upbuffer);
 	if (user==-2)	printm(0,"ALL\n\n");
 	else		printm(0,"%-d\n\n",user);
 	nextline(); nextline();
 
 /*** used users ***/
+
+	/* KT - modified because the display looked bad! */
 	if (files>0) {
-		printm(0,"Used Users: ");
+		printm(0,"Used Users:\n ");
 		for (i=0;i<256;i++) {
 			if (array[i]!=0) {
-				printm(0,"%d with %d file%s  \t",i,array[i],
+				printm(0,"%d with %d file%s\n",i,array[i],
 							plural(array[i]));
 			}
 		}
@@ -916,8 +2024,7 @@ char	ext[INPUTLEN];
 /*** files ***/
 
 /* fetch all needed files */
- /* fill the array with 64+1 large, but nonnegative values */
-	for (i=0;i<=dpb->DRM+1;i++) array[i]=0xFFF;
+	for (i=0;i<=dpb->DRM;i++) array[i]=0xFFF; /* large but not negative */
 
 	ent=glob_cpm_file(pat);
 	files=0;
@@ -964,7 +2071,7 @@ the requested order */
 				directory[array[i]].name,
 				directory[array[i]].size,
 				show_attr(directory[array[i]].attr,ATTR_R,FALSE),
-				( directory[array[i]].attr&~ATTR_R? '+' : ' '),
+				( (directory[array[i]].attr&(~ATTR_R))? '+' : ' '),
 				ent);
 			if (i%2==0)	printm(0," %c",vert);
 			else		{putcharm(0,10); nextline();}
@@ -1002,13 +2109,13 @@ the requested order */
 				directory[array[i]].name,
 				directory[array[i]].size,
 				show_attr(directory[array[i]].attr,ATTR_R,FALSE),
-				( directory[array[i]].attr&~ATTR_R? '+' : ' '));
+				( (directory[array[i]].attr&(~ATTR_R))? '+' : ' '));
 
 			get_amshead(array[i]);
 			if (amsdos_header.flag==0) {
 				printm(0,"Empty");
 			} else if (amsdos_header.flag==1) {
-				if (strncmp((char*)
+				if (strncmp((signed char*)
 				  directory[array[i]].ext,"COM",3)==0)
 					printm(0,"CP/M Program");
 				else
@@ -1043,8 +2150,11 @@ the requested order */
 		printm(0,"%s\n",repstr(hori,77));
 		nextline();
 		while (array[i]<0xFFF) {
-			strcpy(upbuffer,
-				(char*)directory[array[i]].name);
+			/* KT - changed strcpy so it doesn't overrun end of buffer */
+			strncpy(upbuffer,
+				(signed char*)directory[array[i]].name, INPUTLEN);
+			upbuffer[INPUTLEN-1]='\0';
+
 			j=array[i]; ent=1;
 /* detect mode */
 			if (directory[array[i]].blk[0]==0)
@@ -1053,7 +2163,13 @@ the requested order */
 /* the only other function using <block_buffer> here is <get_amshead>,
 but they do not interfere! */
 				buf = read_block(directory[array[i]].blk[0]);
-				mode = detectmode((char*)buf,dpb->BLS);
+
+				if (buf==0)
+				{
+					break;
+				}
+
+				mode = detectmode(buf,dpb->BLS);
 			}
 /* count entries */
 			while(directory[j].next>-1) {
@@ -1098,7 +2214,115 @@ footer:
 }
 #endif
 
-long delete(bool silent, char *pat) {
+static void nuke_dir_entry(DirEntry *dir_entry)
+{
+	/* nuke user */
+	dir_entry->user = 0x0E5;
+	/* nuke name */
+	memset(&dir_entry->root,0x0e5, 8);
+	/* nuke extension */
+	memset(&dir_entry->ext,0x0e5, 3);
+	/* nuke rec */
+	dir_entry->rec = 0x0e5;
+	/* clear attr's */
+	dir_entry->attr = 0;
+	/* nuke extent */
+	dir_entry->extent = 0x0e5;
+	/* nuke blk's */
+	memset(&dir_entry->blk,0x0e5, sizeof(int)*16);
+	/* nuke unused */
+	memset(&dir_entry->unused, 0x0e5, 2);
+}
+
+/* this command will clean a disk image. It will fill all blocks (not used
+by valid files in the directory) with 0x0e5, and nuke all directory entries
+for deleted files. USE WITH CARE!
+
+It works by going through the directory, entry by entry, and if the user number
+is not 0x0e5, it marks the blocks as used in a big array.
+
+  It then goes through the big array, and if the block is not used, it will nuke it.
+  Finally, it goes through the directory, and if any entry has 0x0e5 for the user
+  (i.e. it is deleted or unused), it will nuke it!
+*/
+
+void clean(void)
+{
+	int i;
+	unsigned short allocated_blocks;
+	unsigned short *block_allocation;
+
+	printm(1,"Nuke all deleted files ? ");
+#ifndef _LIBRARY_
+	if (!confirmed()) return;
+#endif
+
+	allocated_blocks = ((dpb->AL0<<8) | dpb->AL1);
+
+	block_allocation = (ushort *)Malloc(sizeof(ushort)*(dpb->DSM+1));
+
+	if (block_allocation==NULL)
+		return;
+
+	memset(block_allocation, 0, sizeof(ushort)*(dpb->DSM+1));
+
+
+	/* fill block allocation array. If !=0, this block is allocated to a valid file,
+	or is allocated with AL0/AL1 */
+	for (i=0; i<16; i++)
+	{
+		if ((allocated_blocks & (1<<(15-i)))!=0)
+		{
+			block_allocation[i] = 1;
+		}
+	}
+
+	/* mark all blocks used by valid files */
+	for (i=0;i<=dpb->DRM;i++)
+	{
+		if (directory[i].user!=0x0e5)
+		{
+			int j;
+
+			for (j=0;j<BLKNR;j++)
+			{
+				if (directory[i].blk[j])
+				{
+					block_allocation[directory[i].blk[j]] = 1;
+				}
+			}
+		}
+	}
+
+	/* go through all blocks */
+	for (i=0; i<dpb->DSM+1; i++)
+	{
+		/* is it allocated to a valid file? */
+		if (block_allocation[i]==0)
+		{
+			/* no. NUKE IT! - note: block is already free! */
+			nuke_block(i);
+		}
+	}
+
+	/* find all deleted directory entries... */
+	for (i=0; i<=dpb->DRM; i++)
+	{
+		if (directory[i].user==0x0e5)
+		{
+			/* nuke it */
+			nuke_dir_entry(&directory[i]);
+		}
+	}
+
+	free(block_allocation);
+	update_directory(1);
+	calc_allocation();
+}
+
+
+/* erase file, no undelete possible! */
+long nuke(bool silent, char *pat) {
 /*   ^^^^^^
 Delete all files that match <pat>.
 Answer the amount of deleted bytes (at least 0) */
@@ -1108,14 +2332,14 @@ int	ent, i;
 
 
 /* warn, if <pat> contains *.* or is only usernumber */
-#ifndef _LIBRARY_
 	if (match("*\\*.\\**",pat) || match("*:",pat)) {
 		if (!silent && Verb > 0) {
-			printm(1,"Delete all in \"%s\"? ",pat);
+			printm(1,"Nuke all in \"%s\"? ",pat);
+#ifndef _LIBRARY_
 			if (!confirmed()) return 0;
+#endif
 		}
 	}
-#endif
 
 	ent = glob_cpm_file(pat);
 	if (ent<0) {
@@ -1126,18 +2350,91 @@ int	ent, i;
 
 	while (ent>=0) {
 		freed = 0;
-#ifndef _LIBRARY_
 		if (directory[ent].attr & ATTR_R) {
 			if (!silent && Verb > 0) {
-				printm(1,"\"%u:%s\" readonly. Delete? ",
+				printm(1,"\"%u:%s\" readonly. Nuke? ",
 				    directory[ent].user,directory[ent].name);
+#ifndef _LIBRARY_
 				if (!confirmed()) {
 					ent = glob_cpm_next();
 					continue;
 				}
+#endif
 			}
 		}
+
+		if (!silent) printm(3,"Nukeing \"%u:%s\": ",
+				directory[ent].user,directory[ent].name);
+		freed += directory[ent].size;
+		while (ent>=0)
+		{
+			int next;
+
+			next = directory[ent].next;
+
+			for (i=0;i<BLKNR;i++) {
+				if (directory[ent].blk[i]==0) break;
+				/* free it */
+				free_block(directory[ent].blk[i]);
+				/* nuke it */
+				nuke_block(directory[ent].blk[i]);
+			}
+
+			nuke_dir_entry(&directory[ent]);
+			ent = next;
+		};
+
+		if (!silent) printm(3,"%ld Bytes\n",freed);
+		total_freed += freed;
+		ent = glob_cpm_next();
+	}
+
+	update_directory(1);
+	calc_allocation();
+	return total_freed;
+}
+
+
+long delete(bool silent, char *pat) {
+/*   ^^^^^^
+Delete all files that match <pat>.
+Answer the amount of deleted bytes (at least 0) */
+long	freed = 0;
+long	total_freed = 0;
+int	ent, i;
+
+
+/* warn, if <pat> contains *.* or is only usernumber */
+	if (match("*\\*.\\**",pat) || match("*:",pat)) {
+		if (!silent && Verb > 0) {
+#ifndef _LIBRARY_
+			printm(1,"Delete all in \"%s\"? ",pat);
+			if (!confirmed()) return 0;
 #endif
+		}
+	}
+
+	ent = glob_cpm_file(pat);
+	if (ent<0) {
+		if (!silent) errorf(FALSE,"\"%s\" not found",pat);
+		return 0;
+	}
+
+
+	while (ent>=0) {
+		freed = 0;
+		if (directory[ent].attr & ATTR_R) {
+			if (!silent && Verb > 0) {
+				printm(1,"\"%u:%s\" readonly. Delete? ",
+				    directory[ent].user,directory[ent].name);
+#ifndef _LIBRARY_
+				if (!confirmed()) {
+					ent = glob_cpm_next();
+					continue;
+				}
+#endif
+			}
+		}
 
 		if (!silent) printm(3,"Deleting \"%u:%s\": ",
 				directory[ent].user,directory[ent].name);
@@ -1157,7 +2454,7 @@ int	ent, i;
 		ent = glob_cpm_next();
 	}
 
-	update_directory();
+	update_directory(1);
 	calc_allocation();
 	return total_freed;
 }
@@ -1192,7 +2489,7 @@ int	ent, ent0;
 	return 0;
 }
 
-
+#if 0
 int sysgen(char *filename) {
 /*  ^^^^^^
 Copies the CP/M system from <filename> to the first two tracks of the image.
@@ -1205,7 +2502,10 @@ int	t;
 short	tracksize = dpb->BPS*dpb->SECS; /* = Disk_header.tracksize - 0x100 */
 long	n;
 
-	strcpy(buf,filename);
+	/* KT - changed strcpy so it doesn't overwrite buffer */
+	strncpy(buf,filename, INPUTLEN);
+	buf[INPUTLEN-1] = '\0';
+
 	if (strchr(buf,'.')==NULL) strcat(buf,".cpm");
 
 	cpm = open(buf,O_RDONLY|O_BINARY,0);
@@ -1238,85 +2538,319 @@ long	n;
 
 	return 0;
 }
+#endif
+
+void LoadLabelFile(char *LabelFilename, unsigned char **ppData, unsigned long *pLength)
+{
+	FILE *fh;
+	char *LabelData = NULL;
+
+	*ppData = NULL;
+	*pLength = 0;
+
+	if (strlen(LabelFilename)==0)
+		return;
+	
+	fh = fopen(LabelFilename,"rb");
+
+	if (fh!=NULL)
+	{
+		char *LoadedLabelData;
+		unsigned long Length;
+
+		/* seek to end of file */
+		fseek(fh, 0, SEEK_END);
+
+		/* report current position/length of file */
+		Length = ftell(fh);
+
+		/* seek back to start of file */
+		fseek(fh, 0, SEEK_SET);
+
+		/* allocate memory to store file data */
+		LoadedLabelData = malloc(Length);
+
+		if (LoadedLabelData!=NULL)
+		{
+			/* read label data */
+			if (fread(LoadedLabelData,1, Length,fh)==Length)
+			{
+				int offset = 0;
+
+				/* check for AMSDOS header only if length is greater than 128 bytes */
+				if (Length>128)
+				{
+					int i;
+					ushort	sum = 0;
+					ushort checksum;
+
+					/* get checksum byte */
+					checksum = ((LoadedLabelData[67] & 0x0ff) | ((LoadedLabelData[68] & 0x0ff)<<8));
+
+					for (i=0;i<=66;i++) {
+						sum += LoadedLabelData[i];
+					}
+
+					if (sum==checksum)
+					{
+						/* set offset to copy from */
+						offset = 128;
+					}
+				}
+
+				/* copy data into label data buffer */
+				LabelData = malloc(Length-offset);
+
+				if (LabelData!=NULL)
+				{
+					memcpy(LabelData, LoadedLabelData+offset, Length-offset);
+
+					*ppData = LabelData;
+					*pLength = Length-offset;
+				}
+
+			}
+
+			free(LoadedLabelData);
+		}
+
+		fclose(fh);
+	}
+	else
+	{
+		errorf(TRUE, "Label file \"%s\" not found!", LabelFilename);
+	}
+}
+
+int	write_label(DPB_type *dpb,char *label_data, unsigned long label_data_length)
+{
+	int hd,trk,sec;
+	unsigned long LengthRemaining;
+	unsigned long Offset;
+	int r,h;
+	int result = 0;
+
+	LengthRemaining = label_data_length;
+	Offset = 0;
+
+	/* not sure how 22disk labels a disc when the defintion is defined
+	to access side 2 of a disc */
+	/* does it use TRKS and OFS to calculate number of tracks used by system */
+	/* e.g. if OFS is 42 and TRKS is 40, then system tracks could be 2.
+	does it write at track 0 on side 2 or track 0 side 0? */
+	trk = 0;
+	sec = 0;
+	hd = 0;
+
+	while (LengthRemaining!=0)
+	{
+		unsigned char *sector_ptr;
+
+		/* read the track */
+		result = read_track(hd, trk);
+		if (result != 0)
+			return result;
+		
+		r = sec;
+
+		if (hd==0)
+		{
+			h = dpb->side0_hd;
+			r = dpb->SEC_side1[r];
+			//r+=dpb->SEC1_side1;
+		}
+		else
+		{
+			h = dpb->side1_hd;
+			r = dpb->SEC_side2[r];
+			//r+=dpb->SEC1_side2;
+		}
+
+		sector_ptr = get_sector_data_ptr(r,h);
+
+		if (sector_ptr!=NULL)
+		{
+			if (LengthRemaining<dpb->BPS)
+			{
+				memcpy(sector_ptr, label_data + Offset, LengthRemaining);
+				memset(sector_ptr+LengthRemaining, label_data[Offset + LengthRemaining-1], dpb->BPS-LengthRemaining);
+				LengthRemaining = 0;
+			}
+			else
+			{
+				memcpy(sector_ptr, label_data + Offset, dpb->BPS);
+				Offset+=dpb->BPS;
+				LengthRemaining -= dpb->BPS;
+			}
+			track_dirty = 1;
+		}
+
+		if (next_sector(&hd, &trk, &sec)) write_track();
+	}
+	return write_track();
+}
 
 
-int format(char* name, DPB_type *dpb) {
+int format(char* name, DPB_list_entry *entry, int extended) {
 /*  ^^^^^^
 Creates a new image with name <name> and format <dpb>. <dpb> must be out of
 the <DPB_store>, not processed by <update_dpb>!
 Answers -1 on error.
 */
-int	file;
+int	format_file;
 int	i,h,j;
 struct t_header *trhd;
 time_t	now;
+DPB_type *dpb= &entry->dpb;
+int track_size;
+int sec_base;
 
-	file = creat(name,0644);
-	if (file<0) {
+#if defined(WIN32) || defined(WIN64)
+//	format_file= open(name,O_RDWR|O_BINARY,0);
+
+format_file = creat(name, _S_IREAD | _S_IWRITE);
+#else
+	format_file = creat(name,0644);
+#endif
+
+
+	if (format_file<0) {
 		return errorf(TRUE,"Cannot open \"%s\" for writing",name);
 	}
 
 
 /* fill disk_header */
-	printm(3,"Formatting (%s) ",show_format(dpb->ID));
+	printm(3,"Formatting (%s) ",show_format(entry));
 	for (j=0;j<0x2F;j++) disk_header.tag[j] = 0;
-	strcpy ((char*)disk_header.tag,"MV - CPCEMU / ");
+
+	if (extended)
+	{
+		strcpy ((signed char*)disk_header.tag,"EXTENDED    / ");
+	}
+	else
+	{
+		strcpy ((signed char*)disk_header.tag,"MV - CPCEMU / ");
+	}
 	memset((disk_header.tag)+14,' ',20);
 	now = time(NULL);
-	strftime(((char*)disk_header.tag)+14,20,"%d %b %y %H:%M",
+	strftime(((signed char*)disk_header.tag)+14,20,"%d %b %y %H:%M",
 							localtime(&now));
-	disk_header.nbof_tracks	= dpb->TRKS;
-	disk_header.nbof_heads	= dpb->HDS;
-	disk_header.tracksize	= 0x100 + dpb->BPS*dpb->SECS;
+	disk_header.nbof_tracks	= (unsigned char)dpb->TRKS;
+	disk_header.nbof_heads	= (unsigned char)dpb->HDS;
+
+	track_size = 0x0100 + (dpb->BPS * dpb->SECS);
+
+	if (extended)
+	{
+		disk_header.tracksize = 0;
+	}
+	else
+	{
+		disk_header.tracksize	= track_size;
+	}
 	memset(disk_header.unused,0,0xCC);
-	if (write(file,&disk_header,0x100) < 0) {
+
+	if (extended)
+	{
+		unsigned char TrackSizeByte = track_size>>8;
+
+		/* extended disk images have a size for each track. This is stored /256 */
+		memset(disk_header.unused, TrackSizeByte, dpb->TRKS*dpb->HDS);
+	}
+
+#if defined(WIN32) || defined(WIN64)
+	if (_write(format_file,&disk_header,0x100) < 0) {
+#else
+	if (write(format_file,&disk_header,0x100) < 0) {
+#endif
 		return errorf(TRUE,"FORMAT");
 	}
 
-	track = Malloc(disk_header.tracksize);
+	track = Malloc(track_size);
+
 	trhd = (struct t_header*)track;
 	for (i=0;i<disk_header.nbof_tracks;i++)
-	    for (h=0;h<disk_header.nbof_heads;h++) {
+	    for (h=0;h<disk_header.nbof_heads;h++)
+		{
+		int sec_index;
+
 		if (Break_Wish) {
-			close(file);
+			close(format_file);
 			abandonimage();
 			do_break();
 		}
 /* fill track_header */
 		putcharm(3,'.'); fflush(stdout);
-		strncpy((char*)trhd->tag,"Track-Info\r\n",0x10);
+		strncpy((signed char*)trhd->tag,"Track-Info\r\n",0x10);
 		trhd->track	= i;
 		trhd->head	= h;
 		trhd->unused[0] = 0;
 		trhd->unused[1] = 0;
 		trhd->BPS	= dpb->BPS/0x100;
-		trhd->SPT	= dpb->SECS;
+		trhd->SPT	= (unsigned char)dpb->SECS;
 		trhd->GAP3	= 0x4E;
 		trhd->filler	= 0xE5;
+
+		sec_index = 0;
+		sec_base = 0;
+
 		for (j=0;j<dpb->SECS;j++) {
 			trhd->sector[j].track	= i;
-			trhd->sector[j].head	= h;
-			trhd->sector[j].sector	= dpb->SEC1+j;
+			if (h==0)
+			{
+				trhd->sector[j].head	= dpb->side0_hd;
+				trhd->sector[j].sector	= dpb->SEC_side1[sec_index];
+			}
+			else
+			{
+				trhd->sector[j].head	= dpb->side1_hd;
+				trhd->sector[j].sector	= dpb->SEC_side2[sec_index]; //dpb->SEC1_side2 + sec_index;
+			}
 			trhd->sector[j].BPS	= dpb->BPS/0x100;
 			trhd->sector[j].status1 = 0;
 			trhd->sector[j].status2 = 0;
 			trhd->sector[j].unused[0]=0;
 			trhd->sector[j].unused[1]=0;
+
+			/* update index */
+			sec_index += dpb->skew;
+
+			/* overflow? */
+			if (sec_index>=dpb->SECS)
+			{
+				/* increment base */
+				sec_base++;
+				/* restart count at base value */
+				sec_index = sec_base;
+			}
 		}
 		for (j=dpb->SECS; j<29; j++)  {
 			memset(&(trhd->sector[j]),0,8);
 		}
 
-		memset(track+0x100,trhd->filler,disk_header.tracksize-0x100);
-		if (write(file,track,disk_header.tracksize) < 0) {
+		memset(track+0x100,trhd->filler,track_size-0x100);
+#if defined(WIN32) || defined(WIN64)
+		if (_write(format_file,track,track_size) < 0) {
+#else
+		if (write(format_file,track,track_size) < 0) {
+
+#endif
 			return errorf(TRUE,"FORMAT");
 		}
 	} /* end for i,h */
 	printm(3,"   done\n");
 	free(track);
-	close(file);
+	track = NULL;
+#if defined(WIN32) || defined(WIN64)
+	_commit(format_file);
+	_close(format_file);
+#else
+	close(format_file);
+#endif
 	*disk_header.tag = 0;
 	cur_trk = -1;
+	cur_hd = -1;
+	directory_dirty =0;
 
 	return 0;
 }
@@ -1341,6 +2875,12 @@ char	from_ext[INPUTLEN];
 char	from_full[INPUTLEN];
 int	ent;
 const char wild_fmt[] = "\"%s\" may not contain wildcards";
+to_root[0] = '\0';
+to_ext[0] = '\0';
+to_full[0] = '\0';
+from_root[0] = '\0';
+from_ext[0] = '\0';
+from_full[0] = '\0';
 
 	upper(to);
 	upper(from);
@@ -1356,8 +2896,8 @@ const char wild_fmt[] = "\"%s\" may not contain wildcards";
 	if (from_user==-2) return errorf(FALSE,"--==>>> ren_file: wild user");
 	if (*from_root==0)
 		return errorf(FALSE,"No name in \"%s\"",from);
-	build_cpm_name((char*)from_full, from_user,
-		(char*)from_root, (char*)from_ext);
+	build_cpm_name((signed char*)from_full, from_user,
+		(signed char*)from_root, (signed char*)from_ext);
 
 	parse_cpm_filename(to,&to_user,to_root,to_ext);
 	if (to_user==-1) to_user = cur_user;
@@ -1365,8 +2905,8 @@ const char wild_fmt[] = "\"%s\" may not contain wildcards";
 		strcpy(to_root,from_root);
 		strcpy(to_ext,from_ext);
 	}
-	build_cpm_name((char*)to_full, to_user,
-		(char*)to_root, (char*)to_ext);
+	build_cpm_name((signed char*)to_full, to_user,
+		(signed char*)to_root, (signed char*)to_ext);
 
 /* test on identity of <to> and <from> */
 	if (strcmp(to_full,from_full)==0) {
@@ -1376,15 +2916,15 @@ const char wild_fmt[] = "\"%s\" may not contain wildcards";
 
 /* check if already exists */
 	if (glob_cpm_file(to_full)>=0) {
-#ifndef _LIBRARY_
 		if (Verb > 0) {
 			printm(1,"\"%s\" already exists! Overwrite? ",to_full);
+#ifndef _LIBRARY_
 			if (confirmed())	delete(TRUE,to_full);
 			else			return 0;
-		} else return errorf(FALSE,"\"%s\" already exists",to_full);
 #else
-		delete(TRUE,to_full);
+			delete(TRUE,to_full);
 #endif
+		} else return errorf(FALSE,"\"%s\" already exists",to_full);
 	}
 
        	ent = glob_cpm_file(from_full);
@@ -1395,10 +2935,10 @@ const char wild_fmt[] = "\"%s\" may not contain wildcards";
 
 	do {
 		directory[ent].user = to_user;
-		str2mem((char*)directory[ent].root,
-			(char*)to_root, 8);
-		str2mem((char*)directory[ent].ext,
-			(char*)to_ext, 3);
+		str2mem((signed char*)directory[ent].root,
+			(signed char*)to_root, 8);
+		str2mem((signed char*)directory[ent].ext,
+			(signed char*)to_ext, 3);
 		ent = directory[ent].next;
 	} while (ent>=0);
 
@@ -1443,7 +2983,7 @@ Answer -1 on error. */
 #else
 char	tempname[INPUTLEN];
 int	err;
-
+tempname[0] = '\0';
 	tmp_nam(tempname);
 
 	printm(3,"Copying \"%s\" to ",from);
@@ -1464,7 +3004,6 @@ int	err;
 #endif
 }
 
-
 int copy_wild(char *pat, int us) {
 /*  ^^^^^^^^^
 Copies all files that match <pat> to <user>.
@@ -1478,10 +3017,15 @@ char	src[20], trg[20];
 		return -1;
 	}
 	while (ent>=0) {
+		int result;
+		
 		sprintf(src,"%u:%s",directory[ent].user,directory[ent].name);
 		sprintf(trg,"%u:%s",us,directory[ent].name);
 		glob_env++;
-		copy_file(src,trg);
+		result = copy_file(src,trg);
+		if (result!=0)
+			return result;
+		
 		glob_env--;
 		ent=glob_cpm_next();
 	}
@@ -1499,11 +3043,12 @@ int dumpdir (FILE* file) {
 /*  ^^^^^^^ */
 int	i,j;
 char	n[INPUTLEN],e[INPUTLEN];
-
+n[0] = '\0';
+e[0] = '\0';
 	fprintf(file," #  U NAME         EX RE ATR BLOCKS\t\t\t\t\t    NEX\n");
 	for (i=0;i<=dpb->DRM;i++) {
-		strncpy(n,(char*)directory[i].root,8); 	n[8] = 0;
-		strncpy(e,(char*)directory[i].ext,3);	e[3] = 0;
+		strncpy(n,(signed char*)directory[i].root,8); 	n[8] = 0;
+		strncpy(e,(signed char*)directory[i].ext,3);	e[3] = 0;
 		fprintf(file,"%2X%c%2X %s.%s %2X %2X ",
 			i, (directory[i].first?'>':' '),
 			directory[i].user,
@@ -1524,8 +3069,12 @@ char	n[INPUTLEN],e[INPUTLEN];
 			fprintf(file,"<<<");
 		putc(10,file);
 		if (fflush(file)!=0)
+		{
 			return errorf(TRUE,"DUMP -D");
+		}
 	}
+
+
 	return 0;
 }
 
@@ -1546,21 +3095,34 @@ uchar	*p, *q;
 		secs=1;
 		block = blk_calc(hd,trk,sec);
 	} else {
-		hd  = hd_calc(block);
+/*		hd  = hd_calc(block);
 		trk = trk_calc(block);
-		sec = sec_calc(block);
+		sec = sec_calc(block); */
+		calc_t_s_h(block, &trk, &sec, &hd);
 		secs=dpb->BLS/dpb->BPS;
 	}
 
 
 	for (k=0;k<secs;k++) {
+		int sector;
+
 		read_track(hd,trk);
 
 		fprintf(file,
 			"\nBlock %d/Part %d   Head %d Track %d Sector %d\n\n",
 			block,k,  hd,trk,sec);
 		i = 0;
-		p = track+0x100+sec*dpb->BPS;
+
+		if (hd==0)
+		{
+			sector = dpb->SEC_side1[sec]; //+dpb->SEC1_side1;
+		}
+		else
+		{
+			sector = dpb->SEC_side2[sec]; //sec+dpb->SEC1_side2;
+		}
+
+		p = (uchar *)get_sector_data_ptr(sector,hd);
 		while (i<dpb->BPS) {
 			fprintf(file,"%3X %c ",i,vert);
 			q=p;
@@ -1591,9 +3153,41 @@ uchar	*p, *q;
 int map(FILE *file) {
 /* Writes the disk allocation map on <file>. */
 int	h, t, s, b;
+int i;
 char	*str;
+unsigned short allocated_blocks;
+unsigned short *block_allocation;
 
-	str = repstr(' ',max(0,(dpb->SECS*3+2)-9));
+	allocated_blocks = ((dpb->AL0<<8) | dpb->AL1);
+
+
+	block_allocation = (ushort *)Malloc(sizeof(ushort)*(dpb->DSM+1));
+
+	if (block_allocation==NULL)
+		return errorf(TRUE, "DUMP -D");
+
+	memset(block_allocation, 0, sizeof(ushort)*(dpb->DSM+1));
+
+
+	/* fill block allocation array with details of which file
+	is allocated to which block */
+	for (i=0;i<=dpb->DRM;i++)
+	{
+		if (directory[i].user!=0x0e5)
+		{
+			int j;
+
+			for (j=0;j<BLKNR;j++)
+			{
+				if (directory[i].blk[j])
+				{
+					block_allocation[directory[i].blk[j]] = i;
+				}
+			}
+		}
+	}
+
+	str = repstr(' ',max(0,(dpb->SECS*5+2)-9));
 						/* 9 = len("%c Head %-2d") */
 
 	fprintf(file,"      ");
@@ -1603,51 +3197,73 @@ char	*str;
 	fprintf(file,"\n");
 
 	fprintf(file,"Track ");
-	for (h=0;h<dpb->HDS;h++) {
-		fprintf(file,"%c ",vert);
-		for (s=0;s<dpb->SECS;s++) {
-			fprintf(file,"%-2d ",s);
-		}
+	fprintf(file,"%c ",vert);
+
+	for (s=0;s<dpb->SECS;s++) {
+		fprintf(file,"%-4d ",s);
 	}
+	fprintf(file,"\n");
+	fprintf(file,"& Head");
+	fprintf(file,"%c ",vert);
 	fprintf(file,"\n");
 
 	str=repstr(hori,6); fprintf(file,"%s",str);
-	for (h=0;h<dpb->HDS;h++) {
-		str = repstr(hori,dpb->SECS*3+1);
-		fprintf(file,"%c%s",cross,str);
-	}
+
+	str = repstr(hori,dpb->SECS*5+1);
+	fprintf(file,"%c%s",cross,str);
 	fprintf(file,"\n");
 
 	for (t=0;t<dpb->TRKS;t++) {
-		fprintf(file,"%-4d  ",t);
 		for (h=0;h<dpb->HDS;h++) {
-			fprintf(file,"%c ",vert);
+			fprintf(file,"%-4d %1x ",t,h);
 			for (s=0;s<dpb->SECS;s++) {
-
 				b = blk_calc(h,t,s);
-				if (h+dpb->HDS*t < dpb->OFS) {
-					if (dpb->SYS) {
-						fprintf(file,"$$ ");
-					} else {
-						fprintf(file,"-- ");
+
+				if (b>=(dpb->DSM+1))
+				{
+					fprintf(file,"-NA- ");
+				}
+				else
+				{
+
+					if (h+dpb->HDS*t < dpb->OFS) {
+						if (dpb->SYS) {
+							fprintf(file,"$$$$ ");
+						} else {
+							fprintf(file,"---- ");
+						}
+						continue;
 					}
-					continue;
-				}
-				if (b < dpb->DBL) {
-					fprintf(file,"DD ");
-					continue;
-				}
-				if (is_free_block(b)) {
-					fprintf(file,"-- ");
-				} else {
-					fprintf(file,"%2X ",blk_alloc[b]);
+
+					if (
+						(b<16) &&
+						((allocated_blocks & (1<<(15-b)))!=0)
+						)
+					{
+						fprintf(file,"DDDD ");
+						continue;
+					}
+
+
+					if (is_free_block(b)) {
+						fprintf(file,"---- ");
+					} else {
+						fprintf(file,"%4X ",block_allocation[b]);
+					}
 				}
 			}
+			fprintf(file,"\n");
 		}
 		fprintf(file,"\n");
 		if (fflush(file)!=0)
+		{
+			free(block_allocation);
 			return errorf(TRUE,"DUMP -M");
+		}
 	}
+
+	free(block_allocation);
+
 	return 0;
 }
 
@@ -1708,8 +3324,12 @@ uchar	*buf, *p;
 
 
 /* open DOS file */
-#ifndef _LIBRARY_
+#if defined(WIN32) || defined(WIN64)
+	if (_access(target, F_OK)==0) {
+#else
 	if (access(target,F_OK)==0) {
+#endif
+#ifndef _LIBRARY_
 		if (Verb > 0) {
 			printm(1,"\"%s\" already exists! "
 					"Overwrite? ",target);
@@ -1717,9 +3337,13 @@ uchar	*buf, *p;
 				return -1;
 			}
 		}
-	}
 #endif
+	}
+#if defined(WIN32) || defined(WIN64)
+	file = _creat(target, _S_IREAD | _S_IWRITE);
+#else
 	file=creat(target,0644);
+#endif
 	if (file<0) return errorf(TRUE,"Cannot open \"%s\" for writing",target);
 
 
@@ -1740,11 +3364,21 @@ uchar	*buf, *p;
 			}
 
 			buf = read_block((signed)directory[ent].blk[i]);
+			if (buf == NULL)
+			{
+				errorf(FALSE, "Failed to read block %d for "
+					"\"%u:%s\"",
+					directory[ent].blk[i],
+					directory[ent].user,
+					directory[ent].name);
+				close(file);
+				return -1;
+			}
 			if (localmode == -1) {
 				if (mode!=M_AUTO)
 					localmode = mode;
 				else {
-					localmode = detectmode((char*)buf,
+					localmode = detectmode(buf,
 							(signed)dpb->BPS);
 /*					printm(3,"%s detected.\n",
 						show_mode(localmode));
@@ -1754,30 +3388,51 @@ uchar	*buf, *p;
 
 /* copy a whole block, except if on last blockpointer in last entry, then
    copy records */
+			/* if we are accessing the last directory entry for this file.. */
 			if (last &&
-			    (i==BLKNR-1 ||
+			    /* and indexing last block index in directory entry */
+				/* e.g. 16 block index's can fit in a directory entry and we
+				are accessing index 15 */
+				((i==BLKNR-1) ||
+				/* or indexing a block which is last in file */
+				/* e.g. 16 block index's can fit in a directory entry and we
+				are accessing index 5, index 6 is 0 indicating no more blocks */
 			     directory[ent].blk[i+1]==0)) {
-				size = directory[ent].rec*RECORDSIZE % dpb->BLS;
-				if (size==0) size=dpb->BLS;
-				  /* works, because .rec==0 is impossible */
+				size =
+					/* number of extents used by this directory */
+					(((directory[ent].extent & dpb->EXM)*EXTENTSIZE) +
+					/* number of bytes used by all records used by all blocks in the directory
+					entry */
+					(directory[ent].rec*RECORDSIZE))
+					-
+					/* number of bytes used by blocks to this point */
+					(i*dpb->BLS);
 			} else {
 				size = dpb->BLS;
 			}
 
-			if (localmode==M_BIN) {
-				err=write(file,buf,size);
-				bytes += size;
-			} else  {	/* up to ^Z */
-				p = memchr(buf,CPM_EOF,size);
-				if (p==NULL) {/* no ^Z */
-				    err=write(file,buf,size);
-				    bytes += size;
-				} else {/* get only a fraction of block */
-				    k = p-buf;
-				    err=write(file,buf,k);
-				    bytes += k;
+			if (size>=0)
+			{
+				if (localmode==M_BIN) {
+					err=write(file,buf,size);
+					bytes += size;
+				} else  {	/* up to ^Z */
+					p = memchr(buf,CPM_EOF,size);
+					if (p==NULL) {/* no ^Z */
+						err=write(file,buf,size);
+						bytes += size;
+					} else {/* get only a fraction of block */
+						k = p-buf;
+						err=write(file,buf,k);
+						bytes += k;
+					}
 				}
 			}
+			else
+			{
+				err = size;
+			}
+
 			if (err<0) {
 				close(file);
 				return errorf(TRUE,"GET");
@@ -1802,18 +3457,18 @@ int	file;
 int	entry,			/* current dir entry */
 	blk,			/* pointer in data space */
 	i;
-long	size;
+long    size = 0;
 long	total;			/* total bytes */
 long	entry_total;		/* total bytes for one entry */
 int	used_entries;
-long	bytes_to_copy;		/* size of DOS files */
 
 int	usr;
 char	rootname[INPUTLEN];
 char	extension[INPUTLEN];
 const char wild_fmt[] = "\"%s\" may not contain wildcards";
 struct stat stat_buf;
-
+rootname[0] = '\0';
+extension[0] = '\0';
 	buf = block_buffer;	/* simply a shortcut */
 
 	if (has_wildcards('d',src)) {
@@ -1836,8 +3491,7 @@ struct stat stat_buf;
 		errorf(TRUE,"--==>>> put: cannot stat \"%s\"",src);
 		return -2;
 	}
-        bytes_to_copy = stat_buf.st_size;
-	if (bytes_to_copy > (long)(dpb->DSM+1)*dpb->BLS) {
+	if (stat_buf.st_size > (long)(dpb->DSM+1)*dpb->BLS) {
 		errorf(FALSE,"\"%s\" is bigger than image",src);
 		return -1;
 	}
@@ -1877,13 +3531,21 @@ struct stat stat_buf;
 
 /* fill name, user ... */
 		directory[entry].user = usr;
-		str2mem((char*)directory[entry].root,
-			(char*)rootname, 8);
-		str2mem((char*)directory[entry].ext,
-			(char*)extension, 3);
+		str2mem((signed char*)directory[entry].root,
+			(signed char*)rootname, 8);
+		str2mem((signed char*)directory[entry].ext,
+			(signed char*)extension, 3);
 		directory[entry].attr	= 0x00;
 		directory[entry].unused[0]	= 0;	/* reserved for CP/M */
 		directory[entry].unused[1]	= 0;
+
+		/* KT - initialise blocks - if an error was caused during writing
+		the remaining blocks could be 0x0e5. It would then attempt to access
+		invalid memory */
+		for (i=0; i<16; i++)
+		{
+			directory[entry].blk[i] = 0;
+		}
 
 /* walk thru the block pointer area */
 		entry_total = 0;
@@ -1897,39 +3559,51 @@ struct stat stat_buf;
 			blk = get_free_block();
 			if (blk==-1)  {
 				errorf(FALSE,"CPC Disk full!");
-				update_directory();
+				update_directory(1);
 				close(file);
 				delete(TRUE,trg);
 				return -2;
 			}
 			directory[entry].blk[i] = blk;
-/* add a ^Z at the end */
-			if (size<dpb->BLS) {
-				buf[size] = CPM_EOF;
-				size++;
-			}
+///* add a ^Z at the end */
+//			if (size<dpb->BLS) {
+//				buf[size] = CPM_EOF;
+//				size++;
+//			}
 /* write the block */
-			alloc_block(blk,entry);
-			if (write_block(blk,(char*)buf)==NULL) {
+			alloc_block(blk);
+			if (write_block(blk,(signed char*)buf)==NULL) {
 				errorf(FALSE,"Write error!");
 				close(file);
 				return -2;
 			}
-			bytes_to_copy -= dpb->BLS;
+
 		}
 
-/* finish up this direntry */
-		while (i<BLKNR) directory[entry].blk[i++] = 0;
+		/* KT - changed calculation, and added brackets */
+		/* there was a few bugs */
 
-/* split the filesize such that <size_so_far> = <extent>*16k + <rec>*128byte */
-		directory[entry].extent = entry_total/EXTENTSIZE
-			+ (dpb->EXM+1) * used_entries;
-		directory[entry].rec = (entry_total+RECORDSIZE-1)
-			/ RECORDSIZE % RECORDSIZE;
-/* if <rec>=0 and <extent> > 0, then set <rec>:=80h and decrement <extent> */
-		if (directory[entry].rec==0 && directory[entry].extent>0) {
-			directory[entry].rec = RECORDSIZE;
-			directory[entry].extent--;
+		/* assumption: with normal ext = 0, numbers are: 0,1,2,3, for each dir entry */
+		/* for ext = 1, numbers are 1,3,5,7.. for each dir entry */
+
+		{
+			int num_extents;
+			int num_records;
+
+			num_extents = (entry_total+16383)>>14;
+
+			if ((entry_total & 0x03fff)!=0)
+			{
+				num_records = ((entry_total & 0x03fff)+RECORDSIZE-1)>>7;
+			}
+			else
+			{
+				num_records = 0x080;
+			}
+
+			/* store num extents */
+			directory[entry].extent = (num_extents-1)+(used_entries*dpb->num_extents);
+			directory[entry].rec = num_records;
 		}
 
 		used_entries++;
@@ -1937,10 +3611,16 @@ struct stat stat_buf;
 	}
 
 	close(file);
-	update_directory();
+	update_directory(1);
 
 /* uncopied data left */
-	if (bytes_to_copy > 0) {
+	if (used_entries == 0)
+	{
+		errorf(FALSE, "CPC Directory full!");
+		delete(TRUE, trg);
+		return -2;
+	}
+	if (size>0) {
 		errorf(FALSE,"CPC Directory full!");
 		delete(TRUE,trg);
 		return -2;
@@ -1952,3 +3632,6 @@ struct stat stat_buf;
 	calc_allocation();
 	return total;
 }
+
+
+
