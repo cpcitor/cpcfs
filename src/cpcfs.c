@@ -286,6 +286,52 @@ DPB_type data_dpb =
 		ORDER_SIDES,0,0,5,0,NULL
 	};
 
+DPB_type data_dpb_two_sides = 
+	{	
+		{0x0c1, 0x0c2, 0x0c3, 0x0c4, 0x0c5,0x0c6,0x0c7,0x0c8,0x0c9}, 
+		{0x0c1, 0x0c2, 0x0c3, 0x0c4, 0x0c5, 0x0c6, 0x0c7, 0x0c8, 0x0c9},
+		9,	/* SECS */
+		40,	/* TRKS */
+		2,	/* HDS */
+		512,	/* BPS */
+
+		36,	/* SPT */
+		3,	/* BSH */
+		7,	/* BLM */
+		0,	/* EXM */
+		179,	/* DSM */
+		63,	/* DRM */
+		0xC0,	/* AL0 */
+		0x00,	/* AL1 */
+		16,	/* CKS */
+		0,	/* OFS */
+		0,0,0,
+		ORDER_SIDES,0,0,5,0,NULL
+	};
+
+DPB_type data_dpb_two_sides_80_tracks = 
+	{	
+		{0x0c1, 0x0c2, 0x0c3, 0x0c4, 0x0c5,0x0c6,0x0c7,0x0c8,0x0c9}, 
+		{0x0c1, 0x0c2, 0x0c3, 0x0c4, 0x0c5, 0x0c6, 0x0c7, 0x0c8, 0x0c9},
+		9,	/* SECS */
+		80,	/* TRKS */
+		2,	/* HDS */
+		512,	/* BPS */
+
+		36,	/* SPT */
+		3,	/* BSH */
+		7,	/* BLM */
+		0,	/* EXM */
+		179,	/* DSM */
+		63,	/* DRM */
+		0xC0,	/* AL0 */
+		0x00,	/* AL1 */
+		16,	/* CKS */
+		0,	/* OFS */
+		0,0,0,
+		ORDER_SIDES,0,0,5,0,NULL
+	};
+
 
 DPB_list_entry *dpb_list_entry = NULL;
 DPB_type *dpb = NULL;	/* pointer to current DPB */
@@ -562,6 +608,12 @@ void cpcfs_init() {
 	
 	/* data */
 	dpb_list_add_item(&dpb_list,"Data Format", "data", &data_dpb);
+	
+	/* data two sides */
+	dpb_list_add_item(&dpb_list,"Data Format (Two sides)", "data-2s", &data_dpb_two_sides);
+	
+	/* data two sides-80 tracks*/
+	dpb_list_add_item(&dpb_list,"Data Format (Two sides 8 Tracks)", "data-2s80", &data_dpb_two_sides_80_tracks);
 	
 	/* system */
 	dpb_list_add_item(&dpb_list,"System Format", "system", &system_dpb);
