@@ -1529,6 +1529,9 @@ int	select_format(uchar *track)
 						errorf(FALSE, "Found format \"%s\" matching disk image format", cur_entry->ident);
 
 						found_count++;
+#ifdef _ANDROID_
+						break;
+#endif
 					}
 				}
 

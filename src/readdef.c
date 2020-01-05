@@ -11,6 +11,9 @@ program. I would also be interested in hearing from you if you are using it. */
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifdef _ANDROID_
+#include <SDL.h>
+#endif
 
 #ifndef TRUE
 #define TRUE (1==1)
@@ -389,7 +392,11 @@ void  parse_def_file(char *Filename)
 	FILE *fh;
 
 	// open file
+#ifdef _ANDROID_
+	fh = SDL_RWFromFile(Filename,"rb");
+#else
 	fh = fopen(Filename,"rb");
+#endif
 
 	if (fh!=NULL)
 	{
@@ -405,7 +412,29 @@ void  parse_def_file(char *Filename)
 			PARSE_STATUS ParseStatus;
 
 			// get a line from the file
+#ifdef _ANDROID_
+			char *curPos = line;
+			int read;
+
+			for (int maxRead = 255; maxRead > 0; maxRead--)
+			{
+				read = SDL_RWread(fh, curPos, 1, 1);
+				if (read == 0 && curPos == line) {
+					result = NULL;
+					break;
+				}
+				if (*curPos == '\n') {
+					curPos++;
+					curPos[0] = 0;
+					result=line;
+					break;
+				}
+				curPos++;
+			}
+
+#else
 			result = fgets(line, 255, fh);
+#endif
 
 			/* initialise parser for this line */
 			Parse_Init(&ParseStatus, line);
@@ -999,7 +1028,11 @@ void  parse_def_file(char *Filename)
 		while ((result!=0) && (quit==0));
 
 		// close file
+#ifdef _ANDROID_
+		SDL_RWclose(fh);
+#else
 		fclose(fh);
+#endif
 	}
 }
 
