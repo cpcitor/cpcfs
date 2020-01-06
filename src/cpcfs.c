@@ -633,6 +633,11 @@ int cpcfs_getNfiles() {
 	return files;
 }
 
+void cpcfs_setDataAsDefaultDPB() {
+	dpb = &data_dpb;
+}
+
+
 char *cpcfs_fileName(int nFile) {
 	int i;
 	nFile++;
