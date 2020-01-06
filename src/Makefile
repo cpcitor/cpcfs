@@ -9,7 +9,7 @@ LDARGS	= $(LDOPT) -lreadline -lhistory -L /usr/lib/termcap -ltermcap
 
 HEADER=cpcfs.h unix.h
 OBJECTS=unix.o match.o tools.o fs.o ui.o cpcfs.o
-LIBOBJECTS=fs.o cpcfs.o tools.o match.o
+LIBOBJECTS=fs.o cpcfs.o tools.o match.o readdef.o
 OUTDIR:=../output
 STATICLIB = $(OUTDIR)/libcpcfs.a
 
