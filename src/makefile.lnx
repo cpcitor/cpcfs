@@ -28,7 +28,8 @@ CFLAGS	= $(CCOPT)
 LDARGS  = $(LDOPT)
 
 ifdef LINUX_VER
-LDARGS += -ltermcap
+LDARGS += -lncurses
+# LDARGS += -ltermcap
 # LDARGS += -lreadline -lhistory -ltermcap
 endif
 
