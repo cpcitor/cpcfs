@@ -60,8 +60,8 @@ int	Verb = 9;
 DirEntry *directory = (DirEntry*)NULL;
 
 /* KT - adjusted stamp */
-char stamp[] = "Compiled: " __DATE__ " "  __TIME__ "  by Kevin Thacker.";
-char copyright[] = "Original code (C) Dec. 1995 Derik van ZÅtphen";
+char stamp[] = "Compiled:  " __DATE__ " "  __TIME__ "   by a user of cpc-dev-tool-chain.";
+char copyright[] = "Original code (C) Dec. 1995 Derik van Zuetphen";
 
 
 /****** Disk Parameter Block ******/
