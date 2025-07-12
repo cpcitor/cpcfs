@@ -2721,8 +2721,6 @@ format_file = creat(name, _S_IREAD | _S_IWRITE);
 	}
 	memset((disk_header.tag)+14,' ',20);
 	now = time(NULL);
-	strftime(((signed char*)disk_header.tag)+14,20,"%d %b %y %H:%M",
-							localtime(&now));
 	disk_header.nbof_tracks	= (unsigned char)dpb->TRKS;
 	disk_header.nbof_heads	= (unsigned char)dpb->HDS;
 
