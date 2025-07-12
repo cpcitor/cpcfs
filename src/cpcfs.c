@@ -12,6 +12,7 @@
 
 
 #include "cpcfs.h"
+#include "libgen.h"// for basename
 
 /***********
   Variables
@@ -567,8 +568,25 @@ int main (int argc, char **argv) {
 
 	dpb_list_add_item(&dpb_list,"IBM Format", "ibm", &ibm_dpb);
 
-	parse_def_file("cpmdisks.def");
-										  
+#define LOG_STR(VAR) fprintf(stderr, #VAR "=%s\n", VAR);
+
+	{
+#define PATHSIZE 1024
+		char runspec[PATHSIZE];
+		ssize_t bytesinrunspec = readlink("/proc/self/exe", runspec, PATHSIZE-1);
+		runspec[bytesinrunspec]=(char)0;
+		LOG_STR(runspec);
+		char *rundir = dirname(runspec);
+		char *cpcxfsdir = dirname(rundir);
+		char defpath[PATHSIZE];
+		LOG_STR(runspec);
+		LOG_STR(rundir);
+		LOG_STR(cpcxfsdir);
+		snprintf(defpath, PATHSIZE-1, "%s/%s", cpcxfsdir, "cpmdisks.def");
+		LOG_STR(defpath);
+		parse_def_file(defpath);
+	}
+
 	ui_main (argc,argv);
 	
 	dpb_list_delete(&dpb_list);
