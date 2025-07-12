@@ -2375,6 +2375,7 @@ line[0] = '\0';
 				switch (tolower(argv[i][2])) {
 				case 'd': strcpy(line,"new -d"); break;
 				case 's': strcpy(line,"new -s"); break;
+				case 'i': strcpy(line,"new -i"); break;
 				case 'v': strcpy(line,"new -v"); break;
 				default:  usage(TRUE); exit(1);
 				}

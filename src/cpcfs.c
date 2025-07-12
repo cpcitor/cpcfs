@@ -287,6 +287,29 @@ DPB_type data_dpb =
 		ORDER_SIDES,0,0,5,0,NULL
 	};
 
+DPB_type ibm_dpb =
+	{
+		{0x1, 0x2, 0x3, 0x4, 0x5,0x6,0x7,0x8,0x9},
+		{0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8, 0x9},
+		8,	/* SECS */
+		40,	/* TRKS */
+		1,	/* HDS */
+		512,	/* BPS */
+
+		36,	/* SPT */
+		3,	/* BSH */
+		7,	/* BLM */
+		0,	/* EXM */
+		153,	/* DSM */
+		63,	/* DRM */
+		0xC0,	/* AL0 */
+		0x00,	/* AL1 */
+		16,	/* CKS */
+		1,	/* OFS */
+		0,0,0,
+		ORDER_SIDES,0,0,5,0,NULL
+	};
+
 
 DPB_list_entry *dpb_list_entry = NULL;
 DPB_type *dpb = NULL;	/* pointer to current DPB */
@@ -542,6 +565,7 @@ int main (int argc, char **argv) {
 	/* system */
 	dpb_list_add_item(&dpb_list,"System Format", "system", &system_dpb);
 
+	dpb_list_add_item(&dpb_list,"IBM Format", "ibm", &ibm_dpb);
 
 	parse_def_file("cpmdisks.def");
 										  
